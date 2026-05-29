@@ -44,7 +44,8 @@ class Compiler:
         self.gcc_path = gcc_path
         self.std = std
         self.opt_level = opt_level
-        self.extra_includes: List[str] = list(extra_includes) if extra_includes else []
+        self.extra_includes: List[str] = list(
+            extra_includes) if extra_includes else []
 
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.cpp_dir.mkdir(parents=True, exist_ok=True)
@@ -75,6 +76,22 @@ class Compiler:
         ]
         fcpp_include = os.environ.get("FCPP_INCLUDE_PATH")
         if fcpp_include:
+            fcpp_path = Path(fcpp_include)
+            if not fcpp_path.is_dir():
+                raise CompilationError(
+                    f"FCPP_INCLUDE_PATH is set to {fcpp_include} but the directory does not exist"
+                )
+            header_candidates = [
+                fcpp_path / "lib" / "fcpp.hpp",
+                fcpp_path / "fcpp" / "fcpp.hpp",
+                fcpp_path / "fcpp.hpp",
+            ]
+            if not any(candidate.exists() for candidate in header_candidates):
+                raise CompilationError(
+                    "FCPP_INCLUDE_PATH is set but does not contain a recognized FCPP header. "
+                    "Verify it points to the FCPP source tree (for example, the directory that contains "
+                    "lib/fcpp.hpp or fcpp/fcpp.hpp)."
+                )
             flags.extend(["-I", fcpp_include])
         for inc in self.extra_includes:
             flags.extend(["-I", inc])
@@ -173,7 +190,8 @@ class Compiler:
                 f"Compilation failed: {result.stderr or result.stdout}"
             )
 
-        _log.info("Success: %s (%.2fs)", binary_path, result.compile_time_seconds)
+        _log.info("Success: %s (%.2fs)", binary_path,
+                  result.compile_time_seconds)
 
         self.cache.store(cpp_code, binary_path)
 

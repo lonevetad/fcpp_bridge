@@ -33,6 +33,7 @@ pip install -e .
 > ```
 >
 > **No-install alternative** — prefix every command instead:
+>
 > ```bash
 > PYTHONPATH=. python -m fcpp_bridge.examples.my_script
 > export PYTHONPATH=/path/to/fcpp_bridge   # persistent for the session
@@ -900,7 +901,7 @@ proxy.close()
 ## 11. Multi-swarm output channels
 
 `DeviceManager` accepts an optional `output_channel=` argument that receives
-fleet-wide status events (start failures, step failures, close errors).  When
+fleet-wide status events (start failures, step failures, close errors). When
 omitted a `LoggingOutputChannel(level="INFO")` is used automatically.
 
 ### Class hierarchy
@@ -958,33 +959,57 @@ manager = DeviceManager(output_channel=ch)
 
 ---
 
+## 11.1 Known Transpiler Limitations
+
+The transpiler works well for the production-ready examples (hop-channel, collection, worker-role patterns). However, when writing complex aggregate functions that:
+
+- Directly invoke FCPP coordination primitives in compute body
+- Use module-level constants (e.g., `COMM = 150.0`, `STATUS_*` enums)
+- Define custom types with nested collections (e.g., `Dict[K, Tuple[...]]`)
+
+You may encounter code generation limitations (being fixed in [TRANSPILER_CODEGEN_REFACTOR_PLAN.md](./development_history/TRANSPILER_CODEGEN_REFACTOR_PLAN.md)):
+
+**Common symptoms**:
+
+- `undefined reference` errors for module-level constants
+- `undeclared identifier` for coordination primitives (e.g., `bis_distance`)
+- Type mismatch errors for complex state structures
+- Python syntax appearing in generated C++ (e.g., `False` instead of `false`)
+
+**Workaround**: Use the simple patterns demonstrated in `worker_role_assignment.py` — call all primitives **before** the `match/case` block, keep constants as inline literals or named class attributes, and stick to basic state types. The CALL-counter alignment rule (all primitives first) is both good practice and a natural workaround for transpiler limitations.
+
+**Status**: Refactor planned for ~1 week. Tracking issue: `TRANSPILER_CODEGEN_REFACTOR_PLAN.md`.
+
+---
+
 ## 12. Further examples
 
 All examples in `examples/` follow the same pattern: an `@aggregate_function` class
 (transpilable) that runs through the full toolchain via `AbstractExample.run()`.
 A C++ compiler and FCPP headers are required.
 
-| File | Highlights |
-| ---- | ---------- |
-| `channel_broadcast.py` | `bis_distance` + `broadcast` elliptical channel; source injects a value that propagates along the shortest-path tree to all nodes inside the channel |
-| `collection_compare.py` | SP / MP / WMP collection algorithms run side-by-side; `sp_collection`, `mp_collection`, `wmp_collection` results compared per-round |
-| `message_dispatch.py` | Full `spawn` + `sp_collection` spanning-tree routing (port of `message_dispatch.hpp`) |
-| `spreading_collection.py` | `abf_distance`, `mp_collection`, `broadcast` (port of `spreading_collection.hpp`) |
-| `chain_decaying.py` | TTL-based decaying chain (port of `chain_decaying.hpp`); `nbr` + `min_hood` + `self_uid()`; `(should_hold, hops, ttl, next_uid)` 4-tuple state; nodes decay out when TTL ≥ threshold |
+| File                                | Highlights                                                                                                                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channel_broadcast.py`              | `bis_distance` + `broadcast` elliptical channel; source injects a value that propagates along the shortest-path tree to all nodes inside the channel                                        |
+| `collection_compare.py`             | SP / MP / WMP collection algorithms run side-by-side; `sp_collection`, `mp_collection`, `wmp_collection` results compared per-round                                                         |
+| `message_dispatch.py`               | Full `spawn` + `sp_collection` spanning-tree routing (port of `message_dispatch.hpp`)                                                                                                       |
+| `spreading_collection.py`           | `abf_distance`, `mp_collection`, `broadcast` (port of `spreading_collection.hpp`)                                                                                                           |
+| `chain_decaying.py`                 | TTL-based decaying chain (port of `chain_decaying.hpp`); `nbr` + `min_hood` + `self_uid()`; `(should_hold, hops, ttl, next_uid)` 4-tuple state; nodes decay out when TTL ≥ threshold        |
 | `communication_roles_assignment.py` | **`bis_distance` ×2** + `old` + `broadcast` + **`match/case`** + `self_uid()`; 4 roles (SENDER / REPEATER / RECEIVER / UNASSIGNED) negotiated by proximity to pre-placed source/sink points |
-| `worker_role_assignment.py` | **`match/case` → C++ `switch`** + `spawn` + `old` + `self_uid()` + `RoleCommunicationType`; 8 `WorkerRole` values, 24-node disaster swarm |
+| `worker_role_assignment.py`         | **`match/case` → C++ `switch`** + `spawn` + `old` + `self_uid()` + `RoleCommunicationType`; 8 `WorkerRole` values, 24-node disaster swarm                                                   |
 
 `worker_role_assignment.py` is the canonical example of the v1.4–v1.7 grammar features:
+
 - **CALL-counter alignment**: all 7 CALL-based primitives are called before the `match/case`;
   each case branch contains only local expressions (no primitives).
 - **Integer-literal case patterns**: bare names like `case RECEIVER:` are capture patterns
   in Python 3.10+ (always match); use `case 1:` with a `# RECEIVER` comment instead.
 - **`self_uid()`** (v1.6): transpiles to `node.uid` in C++ without incrementing the CALL
-  counter.  Safe anywhere — inside or outside `match/case` branches.
+  counter. Safe anywhere — inside or outside `match/case` branches.
 - **Role-specific tasks in step 7**: each case includes a task description and a local
   placeholder variable; implementations marked `# [Placeholder]` are exercise stubs.
 - **`RoleCommunicationType`** (v1.7): ENDPOINT / RECEIVER / REPEATER enum associated with
-  each `WorkerRole` via `ROLE_COMM_TYPE` dict.  Endpoint roles (2, 3, 5, 6, 7) inject
+  each `WorkerRole` via `ROLE_COMM_TYPE` dict. Endpoint roles (2, 3, 5, 6, 7) inject
   sensor-reading messages; repeater roles (0, 4) relay without originating data.
 
 Design notes and 7 evolution paths: `development_history/WORKER_ROLE_ASSIGNMENT.md`.

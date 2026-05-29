@@ -38,7 +38,7 @@ class Transpiler:
         _log.debug("Generating C++ for %s", self.aggregate_class.__name__)
         builder = CppCodeBuilder()
 
-        builder.add_include("<fcpp/fcpp.hpp>")
+        builder.add_include("<lib/fcpp.hpp>")
 
         for inc in (self.state_type.required_includes or []):
             builder.add_include(inc)

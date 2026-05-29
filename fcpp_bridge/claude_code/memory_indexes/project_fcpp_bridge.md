@@ -1,6 +1,6 @@
 ---
 name: project-fcpp-bridge
-description: "fcpp_bridge v1.9 — 675 tests; standalone repo at ../fcpp_bridge/ (flat layout); FCPP_INCLUDE_PATH env var for C++ headers"
+description: "fcpp_bridge v1.9 — 675 tests; standalone repo at ../fcpp_bridge/ (flat layout); FCPP_INCLUDE_PATH must point to <FCPP_ROOT>/src; known bug in runtime_generator.py include directive"
 metadata: 
   node_type: memory
   type: project
@@ -13,8 +13,37 @@ metadata:
 Run tests in monorepo: `src/expr_eval_py/expr_eval_py_env/bin/pytest src/fcpp_bridge/tests/ -q` (after `pip install -e .`; or prefix `PYTHONPATH=src`)  
 Run tests in standalone: `pytest fcpp_bridge/tests/ -v` (after `python3 -m venv .venv && pip install -e .`; or `PYTHONPATH=. pytest fcpp_bridge/tests/`)
 
-**FCPP C++ dependency**: set `export FCPP_INCLUDE_PATH=/path/to/fcpp/src` before running examples that compile C++.  
-`compiler_core.py` and `cmake_generator.py` now read this env var (previously had a broken hardcoded path).
+**FCPP C++ dependency**: set `export FCPP_INCLUDE_PATH=<FCPP_ROOT>/src` — must point to the `src/` subdirectory inside the FCPP clone, NOT the clone root.  
+Example (standalone repo): `export FCPP_INCLUDE_PATH=~/Desktop/prog/cpp/fcpp_bridge/fcpp/src`  
+Example (monorepo): `export FCPP_INCLUDE_PATH=~/Desktop/prog/cpp/c_cpp_study/src/fcpp_py_porting/fcpp_clone_GITIGNORE_ME/fcpp/src`  
+Why `/src`: FCPP headers live at `<FCPP_ROOT>/src/lib/fcpp.hpp`; the include flag is `-I <FCPP_ROOT>/src` so that `#include "lib/fcpp.hpp"` resolves correctly (same convention as FCPP-exercises).
+
+## Known bugs / pending fixes (as of 2026-05-29)
+
+| # | File | Line | Bug | Fix |
+|---|------|------|-----|-----|
+| 1 | `runtime/runtime_generator.py` | 126 | `#include <fcpp/fcpp.hpp>` — path does not exist in FCPP source tree | Change to `#include "lib/fcpp.hpp"` |
+| 2 | Root `README.md` + `fcpp_bridge/README.md` | FCPP setup section | Documents `FCPP_INCLUDE_PATH=<FCPP_ROOT>` (missing `/src`) | Append `/src` in docs |
+| 3 | Both READMEs | — | Two separate README files (root 80L + package 502L); redundant | Merge into one root README |
+
+Fix 1 + Fix 2 must be applied to **both** the standalone repo and the monorepo (`src/fcpp_bridge/`) to stay in sync.
+
+**Why `#include "lib/fcpp.hpp"` not `<fcpp/fcpp.hpp>`**: The FCPP source tree is `fcpp/src/lib/fcpp.hpp`. There is no `fcpp/` subdirectory — the folder named `fcpp` is the repo root, not a subdirectory of the include path. FCPP exercises use `#include "lib/fcpp.hpp"` with `-I <FCPP_ROOT>/src`.
+
+## Standalone repo layout
+
+```
+fcpp_bridge/           ← git repo root
+├── fcpp/              ← FCPP C++ source (clone; NOT bundled, just referenced)
+│   └── src/lib/fcpp.hpp
+├── fcpp_bridge/       ← Python package (import fcpp_bridge) — this IS flat layout
+├── pyproject.toml
+├── README.md          ← 80-line root README (pending merge with inner)
+└── fcpp_bridge/
+    └── README.md      ← 502-line package README (pending merge with root)
+```
+
+`fcpp_bridge/fcpp_bridge/` is **standard Python flat layout** — the package dir is at the repo root, not under `src/`. Packages like Flask (`flask/flask/`) and Requests (`requests/requests/`) use the same pattern. This is NOT src-layout, which would be `fcpp_bridge/src/fcpp_bridge/`.
 
 ## Phase status (as of 2026-05-28)
 

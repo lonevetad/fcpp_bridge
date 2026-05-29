@@ -44,7 +44,8 @@ def test_compiler_custom_std_opt_includes(tmp_path):
 
 def test_compiler_extra_includes_defensive_copy(tmp_path):
     src = ["/inc/a"]
-    compiler = Compiler(cache_dir=tmp_path / "b", cpp_dir=tmp_path / "c", extra_includes=src)
+    compiler = Compiler(cache_dir=tmp_path / "b",
+                        cpp_dir=tmp_path / "c", extra_includes=src)
     src.append("/inc/b")
     assert compiler.extra_includes == ["/inc/a"]  # not affected by mutation
 
@@ -95,6 +96,19 @@ def test_compiler_missing_source():
                 Path(tmpdir) / "nonexistent.cpp",
                 Path(tmpdir) / "output",
             )
+
+
+def test_compiler_invalid_fcpp_include_path(tmp_path, monkeypatch):
+    compiler = Compiler(
+        cache_dir=tmp_path / "build",
+        cpp_dir=tmp_path / "cpp",
+    )
+    monkeypatch.setenv("FCPP_INCLUDE_PATH", str(tmp_path / "missing"))
+    cpp_file = tmp_path / "main.cpp"
+    cpp_file.write_text("int main() { return 0; }\n")
+
+    with pytest.raises(CompilationError, match="FCPP_INCLUDE_PATH"):
+        compiler.compile(cpp_file, tmp_path / "output")
 
 
 # ============================================================================

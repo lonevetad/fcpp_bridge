@@ -123,7 +123,7 @@ private:
         """Generate main_template.hpp — boilerplate for main()."""
         return """
 #pragma once
-#include <fcpp/fcpp.hpp>
+#include <lib/fcpp.hpp>
 #include "ipc_server.hpp"
 #include "state_serializer.hpp"
 #include "node_manager.hpp"

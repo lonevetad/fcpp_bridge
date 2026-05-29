@@ -24,13 +24,13 @@ The tutorial walks through every stage of the pipeline: Python DSL → C++ → c
 
 ## Prerequisites
 
-| Requirement                  | Notes                                                      |
-| ---------------------------- | ---------------------------------------------------------- |
-| Python 3.10+                 | `python --version`                                         |
-| `fcpp_bridge` installed      | `pip install -e .` from repo root (see note below)         |
+| Requirement                  | Notes                                                     |
+| ---------------------------- | --------------------------------------------------------- |
+| Python 3.10+                 | `python --version`                                        |
+| `fcpp_bridge` installed      | `pip install -e .` from repo root (see note below)        |
 | FCPP C++ framework headers   | Clone from `github.com/fcpp/fcpp`; set `FCPP_SRC` env var |
-| `g++` ≥ 9 with C++14 support | `g++ --version`                                            |
-| (Optional) `lld` linker      | Faster linking on Linux                                    |
+| `g++` ≥ 9 with C++14 support | `g++ --version`                                           |
+| (Optional) `lld` linker      | Faster linking on Linux                                   |
 
 > **Making `import fcpp_bridge` work**: install in editable mode once — no prefix needed after that:
 >
@@ -41,11 +41,13 @@ The tutorial walks through every stage of the pipeline: Python DSL → C++ → c
 > ```
 >
 > Verify with:
+>
 > ```bash
 > python -c "import fcpp_bridge; print(fcpp_bridge.__version__)"
 > ```
 >
 > **No-install alternative** — prefix every command instead:
+>
 > ```bash
 > PYTHONPATH=. python -m fcpp_bridge.examples.my_script
 > # or export once for the session:
@@ -426,10 +428,10 @@ exclusive flags:
 The script writes two artifact files so a later stage can pick up where a prior run
 left off:
 
-| Stage       | Artifact written                                                      |
-| ----------- | --------------------------------------------------------------------- |
-| `transpile` | `examples/.fcpp_cpp/consensus_latest.cpp`                             |
-| `compile`   | `examples/.fcpp_build/.latest_binary` (stores the binary path)        |
+| Stage       | Artifact written                                               |
+| ----------- | -------------------------------------------------------------- |
+| `transpile` | `examples/.fcpp_cpp/consensus_latest.cpp`                      |
+| `compile`   | `examples/.fcpp_build/.latest_binary` (stores the binary path) |
 
 ```bash
 # Run everything (from repo root, after pip install -e .)
@@ -584,26 +586,43 @@ logging / metrics / UI
 
 ---
 
+## Known Transpiler Limitations
+
+The transpiler works well for simple aggregate functions like the hop-channel example above. However, **complex examples** (especially those that directly invoke FCPP primitives or use module-level constants) may encounter code generation issues:
+
+**Common issues** (being fixed in [TRANSPILER_CODEGEN_REFACTOR_PLAN.md](./development_history/TRANSPILER_CODEGEN_REFACTOR_PLAN.md)):
+
+- Module-level constants (e.g., `COMM = 150.0`) not exported to C++
+- Custom state types with nested collections not properly translated
+- FCPP primitives requiring manual namespace qualification
+- Python syntax (e.g., `False`, `None`) appearing in generated C++
+
+**Workaround**: The simple examples in this tutorial avoid these issues. For complex examples like `scattered_database.py`, the generated C++ may require manual editing or the example may be run in Python-simulation mode only (see "Pure Python simulation" above).
+
+**Tracking**: See the refactor plan for full details and timeline.
+
+---
+
 ## Further examples
 
 The `examples/` directory contains ready-to-run programs that invoke the **full
-toolchain** — validate → transpile → compile → run C++ binary.  A C++ compiler and
-FCPP headers are required.  Each example is an `AbstractExample` subclass; calling
+toolchain** — validate → transpile → compile → run C++ binary. A C++ compiler and
+FCPP headers are required. Each example is an `AbstractExample` subclass; calling
 `example.run(num_rounds)` handles the entire pipeline automatically.
 
-| File | What it shows |
-| ---- | ------------- |
-| `channel_broadcast.py` | `bis_distance` elliptical channel selection |
-| `collection_compare.py` | SP / MP / WMP collection algorithms side-by-side |
-| `message_dispatch.py` | `spawn` + `sp_collection` point-to-point message routing |
-| `spreading_collection.py` | `abf_distance`, `mp_collection`, `broadcast` — gradient spreading + collection (port of `spreading_collection.hpp`) |
-| `chain_decaying.py` | TTL-based decaying chain; `nbr` + `min_hood` + `self_uid()`; per-node `(should_hold, hops, ttl, next_uid)` state; nodes decay out when TTL ≥ threshold |
+| File                                | What it shows                                                                                                                                                                    |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channel_broadcast.py`              | `bis_distance` elliptical channel selection                                                                                                                                      |
+| `collection_compare.py`             | SP / MP / WMP collection algorithms side-by-side                                                                                                                                 |
+| `message_dispatch.py`               | `spawn` + `sp_collection` point-to-point message routing                                                                                                                         |
+| `spreading_collection.py`           | `abf_distance`, `mp_collection`, `broadcast` — gradient spreading + collection (port of `spreading_collection.hpp`)                                                              |
+| `chain_decaying.py`                 | TTL-based decaying chain; `nbr` + `min_hood` + `self_uid()`; per-node `(should_hold, hops, ttl, next_uid)` state; nodes decay out when TTL ≥ threshold                           |
 | `communication_roles_assignment.py` | **`bis_distance` ×2** + `old` + `broadcast` + **`match/case`** + `self_uid()`; 4 roles (SENDER / REPEATER / RECEIVER / UNASSIGNED) negotiated by proximity to source/sink points |
-| `worker_role_assignment.py` | **`match/case` → C++ `switch`** for 8-role swarm dispatch + periodic `spawn` reports + `self_uid()` + `RoleCommunicationType` |
+| `worker_role_assignment.py`         | **`match/case` → C++ `switch`** for 8-role swarm dispatch + periodic `spawn` reports + `self_uid()` + `RoleCommunicationType`                                                    |
 
 `worker_role_assignment.py` is a good next step after this tutorial: it uses the same
 spanning-tree primitives (`bis_distance`, `nbr`, `min_hood`, `sp_collection`) but adds
 `count_hood`, `old`, a `match/case` block dispatching per `WorkerRole`, `self_uid()`
 (→ `node.uid` in C++; safe inside branches, no CALL counter), and a `RoleCommunicationType`
-enum classifying each role as endpoint / receiver / repeater.  See `DSL_GUIDE.md §6.7`
+enum classifying each role as endpoint / receiver / repeater. See `DSL_GUIDE.md §6.7`
 for the `match/case` reference and `§4` for `self_uid()` in the primitives table.

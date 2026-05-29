@@ -23,7 +23,7 @@ def test_transpiler_simple_float():
     cpp_code = Transpiler(SimpleFloat).generate()
     assert isinstance(cpp_code, str)
     assert len(cpp_code) > 0
-    assert "#include <fcpp/fcpp.hpp>" in cpp_code
+    assert "#include <lib/fcpp.hpp>" in cpp_code
     assert "AGGREGATE_TEMPLATE(main)" in cpp_code
 
 
@@ -298,6 +298,7 @@ def test_transpiler_adds_header_for_used_primitive():
     class MinHoodAgg:
         def initial_state(self) -> float:
             return 0.0
+
         def compute(self, self_state: float, neighbors: Neighborhood[float]) -> float:
             return min_hood(self_state)  # noqa: F821
 
@@ -310,6 +311,7 @@ def test_transpiler_adds_geometry_header_for_rectangle_walk():
     class WalkAgg:
         def initial_state(self) -> float:
             return 0.0
+
         def compute(self, self_state: float, neighbors: Neighborhood[float]) -> float:
             return rectangle_walk(lo, hi, 1.0, 0.1)  # noqa: F821
 
