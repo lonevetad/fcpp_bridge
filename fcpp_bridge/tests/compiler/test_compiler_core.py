@@ -23,8 +23,9 @@ def test_compiler_init():
 
 
 def test_compiler_default_std_and_opt():
+    # std is now unified with transpiler via cpp_standard (default: cpp17).
     compiler = Compiler(cache_dir=Path("/tmp/x"), cpp_dir=Path("/tmp/y"))
-    assert compiler.std == "c++26"
+    assert compiler.std == "c++17"
     assert compiler.opt_level == "2"
     assert compiler.extra_includes == []
 
@@ -147,3 +148,73 @@ def test_compiler_clear_cache():
         (cache_dir / "dummy_binary").write_text("test")
         compiler.clear_cache()
         assert len(compiler.cache.manifest) == 0
+
+
+# ============================================================================
+# Phase 9: config file integration
+# ============================================================================
+
+
+def test_compiler_config_yaml_std_from_cpp_standard(monkeypatch, tmp_path):
+    """Compiler.std is derived from the unified top-level cpp_standard key."""
+    (tmp_path / "fcpp_bridge.yaml").write_text(
+        "cpp_standard: cpp20\n"
+        "compiler:\n"
+        "  gcc_path: /usr/bin/g++-13\n"
+        "  opt_level: '0'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    compiler = Compiler(
+        cache_dir=tmp_path / "build",
+        cpp_dir=tmp_path / "cpp",
+    )
+    assert compiler.std == "c++20"
+    assert compiler.gcc_path == "/usr/bin/g++-13"
+    assert compiler.opt_level == "0"
+
+
+def test_compiler_config_json_sets_extra_includes(monkeypatch, tmp_path):
+    """Compiler reads extra_includes from JSON config."""
+    import json
+    (tmp_path / "fcpp_bridge.json").write_text(
+        json.dumps({"compiler": {"extra_includes": ["/opt/mylib"]}}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    compiler = Compiler(
+        cache_dir=tmp_path / "build",
+        cpp_dir=tmp_path / "cpp",
+    )
+    assert compiler.extra_includes == ["/opt/mylib"]
+
+
+def test_compiler_explicit_std_overrides_config(monkeypatch, tmp_path):
+    """An explicit std argument takes precedence over the unified cpp_standard."""
+    (tmp_path / "fcpp_bridge.yaml").write_text(
+        "cpp_standard: cpp14\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    compiler = Compiler(
+        cache_dir=tmp_path / "build",
+        cpp_dir=tmp_path / "cpp",
+        std="c++20",
+    )
+    assert compiler.std == "c++20"
+
+
+def test_compiler_yaml_beats_json_for_cpp_standard(monkeypatch, tmp_path):
+    """YAML config wins over JSON when both files are present."""
+    import json
+    (tmp_path / "fcpp_bridge.yaml").write_text(
+        "cpp_standard: cpp14\n", encoding="utf-8"
+    )
+    (tmp_path / "fcpp_bridge.json").write_text(
+        json.dumps({"cpp_standard": "cpp26"}), encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    compiler = Compiler(
+        cache_dir=tmp_path / "build",
+        cpp_dir=tmp_path / "cpp",
+    )
+    assert compiler.std == "c++14"

@@ -12,3 +12,11 @@
 - [C++ modern standards reference](reference_cpp_modern.md) — C++14 focus; lambdas, RAII, smart ptrs, templates; skill: `/cpp-modern` (~/.claude/commands/cpp-modern.md)
 - [FCPP library reference](reference_fcpp_library.md) — all primitives, CALL macro, export_list, Python DSL rules; skill: `/fcpp-library` (.claude/commands/fcpp-library.md)
 - [Transpiler code generation issues](../development_history/TRANSPILER_CODEGEN_REFACTOR_PLAN.md) — missing node parameter, constants, type defs, namespace qualifications, Python syntax in C++; refactor plan ~1 week
+- [Transpiler Phase 1 (2026-05-30)](../development_history/SESSION_2026-05-30_PHASE1_IMPLEMENTATION.md) — using declarations for FCPP primitives; node context flows via CALL macro, not explicit params
+- [Transpiler Phase 2+3 (2026-05-30)](../development_history/SESSION_2026-05-30_PHASE2_PHASE3_IMPLEMENTATION.md) — constexpr module constants, True/False/None syntax fixes, set_t alias for frozenset()
+- [Transpiler Phase 4-7 (2026-05-30)](../development_history/SESSION_2026-05-30_PHASE4_7_IMPLEMENTATION.md) — |/&/^/<</>>, ~/&&/||, |=/&=/^=/<<=/>>=, in/not-in/is/is-not, generic for+items+keys+values, dict()/set()/set{}, dict.get()
+- [Transpiler Phase 8 (2026-05-30)](../development_history/SESSION_2026-05-30_PHASE8_IMPLEMENTATION.md) — CppStandard enum, Dict annotation tracking, dict.keys()/values() expr context, list/set/dict comprehensions → IIFE
+- [Transpiler Phase 8b (2026-05-30)](../development_history/SESSION_2026-05-30_PHASE8b_CPP14_CPP26.md) — CPP14/CPP26 added; `supports_structured_bindings()`; 6 code-gen sites updated for C++14 (.first/.second/std::get<>); 789/789 tests
+- [Transpiler Phase 9 / Config (2026-05-30)](../development_history/SESSION_2026-05-30_PHASE9_CONFIG.md) — fcpp_bridge/config/ module; YAML>JSON precedence; load_config(); Transpiler+Compiler use None sentinel; fcpp_bridge.yaml at root; 819/819 tests
+- [Transpiler Phase 9b / Unified std (2026-05-30)](../development_history/SESSION_2026-05-30_PHASE9b_UNIFIED_STD.md) — single top-level cpp_standard drives both transpiler code-gen and compiler -std= flag; TranspilerConfig removed; 817/817 tests
+- [Transpiler code generation refactor](../development_history/TRANSPILER_CODEGEN_REFACTOR_PLAN.md) — Phases 1-9b COMPLETE ✅; CppStandard: CPP14/CPP17(default)/CPP20/CPP26; unified cpp_standard in fcpp_bridge.yaml

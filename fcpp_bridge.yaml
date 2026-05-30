@@ -1,0 +1,42 @@
+# fcpp-bridge project configuration
+# ───────────────────────────────────────────────────────────────────────────
+# Both YAML (fcpp_bridge.yaml / .yml) and JSON (fcpp_bridge.json) are
+# supported.  YAML takes precedence when both files are present.
+#
+# This file is searched from the current working directory upward, so you can
+# place it at the repository root and it will be found regardless of where you
+# run your script.
+#
+# All values shown below are the built-in defaults.
+# Remove or comment-out any line you do not need to customise.
+# ───────────────────────────────────────────────────────────────────────────
+
+# C++ standard — single source of truth for BOTH steps:
+#   • transpiler: controls generated code style (structured bindings,
+#                 std::views::keys/values, etc.)
+#   • compiler:   passed as -std=<value> to g++
+#
+# Accepted: cpp14 | cpp17 | cpp20 | cpp26   (case-insensitive;
+#           also accepts "17", "c++17", etc.)
+cpp_standard: cpp17
+
+compiler:
+  # Directory where compiled binaries are cached.
+  cache_dir: build
+
+  # Directory where generated C++ source files are written.
+  cpp_dir: cpp_transpiled
+
+  # Path to the g++ executable.  Use an absolute path if g++ is not on PATH,
+  # e.g. /usr/bin/g++-13
+  gcc_path: g++
+
+  # Optimisation level: 0 | 1 | 2 | 3 | s | g
+  opt_level: "2"
+
+  # Additional include directories (prepended with -I).
+  # Example:
+  #   extra_includes:
+  #     - /opt/mylib/include
+  #     - /usr/local/include/fcpp
+  extra_includes: []

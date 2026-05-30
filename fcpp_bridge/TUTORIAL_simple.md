@@ -239,7 +239,7 @@ from fcpp_bridge.compiler import Compiler, CompilationError
 compiler = Compiler(
     cache_dir=Path("build"),          # where compiled binaries live
     cpp_dir=Path("generated"),        # where C++ sources are written
-    std="c++14",                      # C++ standard (fcpp requires ≥ C++14)
+    std="c++17",                      # C++ standard (≥ c++14 required by FCPP)
     opt_level="2",                    # -O2 optimisation
     extra_includes=[                  # path to FCPP headers
         "/path/to/fcpp/src",
@@ -253,10 +253,25 @@ except CompilationError as exc:
     print(f"Compilation failed: {exc}")
 ```
 
+> **Config file shortcut**: create `fcpp_bridge.yaml` in your project root and you can omit `std`,
+> `opt_level`, `cache_dir`, `cpp_dir`, and `gcc_path` — `Compiler()` reads them automatically.
+> `Transpiler()` reads `cpp_standard` from the same file, keeping both in sync.
+>
+> ```yaml
+> # fcpp_bridge.yaml
+> cpp_standard: cpp17   # controls both code-gen and -std= flag
+> compiler:
+>   opt_level: "2"
+>   extra_includes: ["/path/to/fcpp/src"]
+> ```
+>
+> Explicit constructor arguments always take precedence over the config file.
+> See the [README § Configuration](../../README.md#configuration) for full details.
+
 Equivalent **shell command** (what `Compiler.compile()` runs internally):
 
 ```bash
-g++ -std=c++14 -Wall -Wextra -O2 \
+g++ -std=c++17 -Wall -Wextra -O2 \
     -I /path/to/fcpp/src \
     -I generated/runtime \
     generated/hop_channel.cpp \
@@ -374,12 +389,15 @@ FCPP_SRC = "/path/to/fcpp/src"     # ← set this to your FCPP clone
 
 def build() -> Path:
     """Transpile and compile the aggregate function."""
+    # Transpiler reads cpp_standard from fcpp_bridge.yaml if present; no arg needed.
     cpp = Transpiler(HopChannelAggregate).generate()
 
+    # Compiler reads all settings from fcpp_bridge.yaml when args are omitted.
+    # Explicit args below override the config (useful when no yaml file is present).
     compiler = Compiler(
         cache_dir=Path("build"),
         cpp_dir=Path("generated"),
-        std="c++14",
+        std="c++17",
         opt_level="2",
         extra_includes=[FCPP_SRC],
     )
@@ -586,20 +604,17 @@ logging / metrics / UI
 
 ---
 
-## Known Transpiler Limitations
+## Transpiler Status
 
-The transpiler works well for simple aggregate functions like the hop-channel example above. However, **complex examples** (especially those that directly invoke FCPP primitives or use module-level constants) may encounter code generation issues:
+The transpiler refactor (Phases 1–9b) is complete — all previously known code-generation issues are resolved:
 
-**Common issues** (being fixed in [TRANSPILER_CODEGEN_REFACTOR_PLAN.md](./development_history/TRANSPILER_CODEGEN_REFACTOR_PLAN.md)):
+- FCPP primitives receive automatic `using`-declarations and `CALL` macro injection.
+- Module-level constants are emitted as `constexpr` declarations.
+- `True`/`False`/`None` and Python-only operators map correctly to C++ equivalents.
+- Collection annotations (`Dict`, `List`, `Set`, `Tuple`, `FrozenSet`) translate to C++ type aliases.
+- Four C++ standards are supported: `cpp14`, `cpp17` (default), `cpp20`, `cpp26` — set once in `fcpp_bridge.yaml`.
 
-- Module-level constants (e.g., `COMM = 150.0`) not exported to C++
-- Custom state types with nested collections not properly translated
-- FCPP primitives requiring manual namespace qualification
-- Python syntax (e.g., `False`, `None`) appearing in generated C++
-
-**Workaround**: The simple examples in this tutorial avoid these issues. For complex examples like `scattered_database.py`, the generated C++ may require manual editing or the example may be run in Python-simulation mode only (see "Pure Python simulation" above).
-
-**Tracking**: See the refactor plan for full details and timeline.
+See [TRANSPILER_CODEGEN_REFACTOR_PLAN.md](./development_history/TRANSPILER_CODEGEN_REFACTOR_PLAN.md) for the complete history.
 
 ---
 

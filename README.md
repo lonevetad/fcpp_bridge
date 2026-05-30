@@ -74,9 +74,35 @@ If this check fails, export `FCPP_INCLUDE_PATH` again in the same terminal sessi
 ## Running Tests
 
 ```bash
-# All 675 tests are pure Python — no C++ compiler or FCPP headers needed
+# All 817 tests are pure Python — no C++ compiler or FCPP headers needed
 pytest fcpp_bridge/tests/ -v
 ```
+
+## Configuration
+
+Project-wide defaults live in a `fcpp_bridge.yaml` (or `.yml`) file placed in your project directory.
+The library walks up from the current working directory to the filesystem root searching for this file;
+`fcpp_bridge.json` is used as a fallback when no YAML file is found.
+
+```yaml
+# fcpp_bridge.yaml
+cpp_standard: cpp17    # drives both transpiler code-gen AND -std= compiler flag
+                       # accepted values: cpp14 | cpp17 (default) | cpp20 | cpp26
+
+compiler:
+  cache_dir: build
+  cpp_dir: cpp_transpiled
+  gcc_path: g++
+  opt_level: "2"
+  extra_includes: []
+```
+
+**Precedence** (highest → lowest): explicit constructor argument → YAML config → JSON config → built-in default (`cpp17`).
+
+When `Transpiler()` or `Compiler()` are constructed without explicit arguments they load the nearest config file automatically.
+Passing an explicit value always overrides the config — the two components are always kept in sync.
+
+> **PyYAML**: YAML support requires `pyyaml>=6.0`, which is installed automatically by `pip install -e .`.
 
 ## Running Examples
 
@@ -110,18 +136,17 @@ It lets Python programs:
 
 ## Known Limitations
 
-### Transpiler Code Generation (in progress)
+### Transpiler Code Generation ✅ (Phases 1–9b complete)
 
-The transpiler currently has limitations when generating C++ for complex aggregate functions:
+Previously known code-generation issues are now resolved:
 
-1. **Module-level constants** — Constants defined at module level (e.g., `COMM = 150.0`) are not automatically exported to the generated C++ code, causing undefined reference errors.
-2. **Custom state types** — Complex nested types (e.g., `Dict[int, Tuple[float, float]]`) in the state dataclass are not translated to C++ type definitions.
-3. **FCPP primitive qualification** — Coordination primitives (e.g., `bis_distance`, `spawn`) may require manual namespace qualification or using declarations in generated code.
-4. **Python syntax in C++** — Some Python syntax (e.g., `False`, `None`) may leak into generated C++ code without proper translation.
+- **FCPP primitive qualification** — All coordination primitives receive automatic `using`-declarations and `CALL` macro injection (Phase 1).
+- **Module-level constants** — Constants defined at module level are emitted as `constexpr` declarations in generated C++ (Phases 2–3).
+- **Python syntax in C++** — `True`/`False`/`None` and Python-only operators are correctly mapped to C++ equivalents (Phases 2–3).
+- **Custom state types** — Common collection annotations (`Dict`, `List`, `Set`, `Tuple`, `FrozenSet`) are translated to C++ type aliases (Phases 4–8).
+- **C++ standard selection** — Four standards are supported: `cpp14`, `cpp17` (default), `cpp20`, `cpp26`.  Set once in `fcpp_bridge.yaml` and both the transpiler and compiler use it automatically (Phases 8b, 9–9b).
 
-**Workaround**: Simple aggregate functions that use basic types and avoid direct FCPP primitive calls work correctly. Complex examples like `scattered_database.py` may require manual C++ editing until the transpiler is refactored.
-
-**Tracking**: See [TRANSPILER_CODEGEN_REFACTOR_PLAN.md](fcpp_bridge/development_history/TRANSPILER_CODEGEN_REFACTOR_PLAN.md) for the full refactor roadmap (Phase 1 planned for 1 week).
+See [TRANSPILER_CODEGEN_REFACTOR_PLAN.md](fcpp_bridge/development_history/TRANSPILER_CODEGEN_REFACTOR_PLAN.md) for the complete refactor history (817/817 tests passing).
 
 ## Project Phases
 

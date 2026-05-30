@@ -1,7 +1,7 @@
 # Transpiler Code Generation Refactor Plan
 
 **Date**: 2026-05-29  
-**Status**: PLANNING  
+**Status**: PHASES 1-9 COMPLETE ✅  
 **Priority**: HIGH  
 **Scope**: Transpiler core code generation pipeline
 
@@ -238,14 +238,90 @@ using dict_t = std::unordered_map<int, std::tuple<float, float>>;
 
 ## Implementation Order
 
-**Phase 1 (Critical - Days 1-2)**:
+**Phase 1 (Critical - Days 1-2)** ✅ COMPLETE:
 
-1. Solution 1 — Add `node` parameter (unblocks CALL macro)
-2. Solution 4 — Add using declarations (unblocks primitive calls)
+1. ~~Solution 1 — Add `node` parameter~~ → REJECTED: FCPP node context flows via CALL macro, not explicit param
+2. Solution 4 — Add using declarations ✅ (2026-05-30)
 
-**Phase 2 (High Priority - Days 3-4)**: 3. Solution 2 — Extract module constants (unblocks constant references) 4. Solution 5 — Fix Python-to-C++ syntax (unblocks type checking)
+**Phase 2 (High Priority - Days 3-4)** ✅ COMPLETE:
 
-**Phase 3 (Medium Priority - Days 5-6)**: 5. Solution 3 — Generate type declarations (completes type safety)
+3. Solution 2 — Extract module constants ✅ (2026-05-30)
+4. Solution 5 — Fix Python-to-C++ syntax ✅ (True→true, False→false, None→nullptr, string escaping) (2026-05-30)
+
+**Phase 3 (Medium Priority - Days 5-6)** ✅ COMPLETE:
+
+5. Solution 3 — Generate type declarations ✅ (set_t alias emitted when frozenset() is used) (2026-05-30)
+
+**Phase 4 (Extended — Bitwise & Arithmetic Gaps)** ✅ COMPLETE (2026-05-30):
+
+6. Solution 6 — Missing binary/unary operators and augmented assignments
+   - Binary: `ast.BitOr` → `|`, `ast.BitAnd` → `&`, `ast.BitXor` → `^`
+   - Arithmetic: `ast.FloorDiv` → `/` (C++ integer division)
+   - Shift: `ast.LShift` → `<<`, `ast.RShift` → `>>`
+   - Short-circuit boolean: `ast.And` → `&&`, `ast.Or` → `||` (via `visit_BoolOp`)
+   - Bitwise negation: `ast.Invert` → `~` (via `visit_UnaryOp`)
+   - Augmented assignments: `|=`, `&=`, `^=`, `<<=`, `>>=`, `//=` (via `visit_AugAssign`)
+   - 8+12 = 20 new tests (8 original + 12 added for booleans/invert/augassign)
+
+**Phase 5 (Extended — Membership & Identity Tests)** ✅ COMPLETE (2026-05-30):
+
+7. Solution 7 — `in` / `not in` / `is` / `is not` operators
+   - `x in container` → `(container.count(x) > 0)` (works for std::set, std::map, std::unordered_*)
+   - `x not in container` → `(container.count(x) == 0)`
+   - `x is None` → `(x == nullptr)`, `x is not None` → `(x != nullptr)`
+   - 6 new tests
+
+**Phase 6 (Extended — For-Loop Generalization)** ✅ COMPLETE (2026-05-30):
+
+8. Solution 8 — Generic for-loop iteration (non-range)
+   - `for x in container:` → `for (auto& x : container) { ... }`
+   - `for k, v in dict.items():` → `for (auto& [k, v] : dict) { ... }` (C++17 structured bindings)
+   - `for (k1, k2), v in dict.items():` → `for (auto& [_kvkey, v] : dict) { auto& [k1, k2] = _kvkey; ... }`
+   - `for k in dict.keys():` → `for (auto& [k, _kv_k] : dict) { ... }`
+   - `for v in dict.values():` → `for (auto& [_kv_v, v] : dict) { ... }`
+   - 6 new tests
+
+**Phase 7 (Extended — Collection Constructors)** ✅ COMPLETE (2026-05-30):
+
+9. Solution 9 — Python collection constructor calls and set literals
+   - `dict(x)` → `x` (C++ copy semantics)
+   - `set(iterable)` → `set_t(iterable.begin(), iterable.end())`
+   - `set()` → `set_t{}`
+   - `{x, y}` (set literal) → `set_t{x, y}`
+   - `list(iterable)` → `std::vector<decltype(*iterable.begin())>(iterable.begin(), iterable.end())`
+   - `dict.get(key)` → `(dict.count(key) ? dict.at(key) : default_init)`
+   - `dict.get(key, default)` → `(dict.count(key) ? dict.at(key) : default)`
+   - 11 new tests
+
+**Phase 8 (Extended — CppStandard, dict.keys()/values() expr, comprehensions)** ✅ COMPLETE (2026-05-30):
+
+10. Solution 10 — `CppStandard` enum (`CPP14`/`CPP17`/`CPP20`/`CPP26`), configurable on `Transpiler` and `PythonAstVisitor`; default `CPP17`; added `supports_structured_bindings()` predicate; C++14 emits `.first`/`.second` and `std::get<>` where C++17+ uses structured bindings; C++20/26 mode uses `std::views::keys/values` + `#include <ranges>`
+11. Solution 11 — `Dict[K,V]` annotation tracking in `dict_type_env`; `_annotation_to_cpp`/`_annotation_to_dict_types` helpers; concrete types preferred over `decltype` when annotation is present
+12. Solution 12 — `dict.keys()` / `dict.values()` in expression context: C++17 IIFE with `std::vector<TYPE>`; C++20 `std::views::keys/values`; `set(d.keys())` special-cased to avoid double IIFE
+13. Solution 13 — List comprehensions `[expr for var in iter if cond]` → IIFE with `std::vector<_T>`
+14. Solution 14 — Set comprehensions `{expr for var in iter if cond}` → IIFE with `std::set<_T>`
+15. Solution 15 — Dict comprehensions `{k: v for var in iter if cond}` → IIFE with `std::map<_K, _V>`
+    - All comprehension forms support: `range()`, `d.items()` (k,v), `d.keys()`, `d.values()`, generic container
+    - Element type deduced via `_expr_fn` trick (no explicit annotation needed)
+    - 41 new tests
+
+**Phase 9 (Project configuration file)** ✅ COMPLETE (2026-05-30):
+
+16. Solution 16 — `fcpp_bridge/config/` module (`BridgeConfig`, `TranspilerConfig`, `CompilerConfig` dataclasses + `load_config()` loader)
+    - YAML (`.yaml`/`.yml`) takes precedence over JSON (`.json`); both searched from CWD upward
+    - `load_config(start_dir=None)` — `None` → `Path.cwd()`; walks to filesystem root
+    - `CppStandard` parsed from multiple notations: `"17"`, `"cpp17"`, `"c++17"` all resolve to `CPP17`
+    - `pyyaml >= 6.0` added to `pyproject.toml` dependencies
+17. Solution 17 — `Transpiler` and `Compiler` constructors now use `None` as sentinel; config loaded lazily when any param is `None`; explicit args always win
+    - `fcpp_bridge.yaml` created at project root with all defaults and inline comments
+    - Precedence: explicit arg > YAML config > JSON config > Python defaults
+    - 30 new tests (22 loader + 4 Transpiler integration + 4 Compiler integration)
+
+**Phase 9b (Unified C++ standard)** ✅ COMPLETE (2026-05-30):
+
+18. Solution 18 — Collapsed `transpiler.cpp_standard` + `compiler.std` into a single top-level `cpp_standard` in `BridgeConfig`; `CompilerConfig.std` removed; `TranspilerConfig` removed; `Compiler.__init__` derives `-std=c++XX` from `bridge.cpp_standard.value`
+    - `fcpp_bridge.yaml` updated: single `cpp_standard:` key at top level
+    - Guarantees transpiler code-gen and compiler flag are always in sync
 
 ---
 
@@ -253,7 +329,7 @@ using dict_t = std::unordered_map<int, std::tuple<float, float>>;
 
 ### Regression Testing
 
-**Existing**: 675 pure-Python tests in `fcpp_bridge/tests/`
+**Existing**: 817 tests in `fcpp_bridge/tests/` (683 after Phase 3 + 29 Phases 4-7 + 12 Phase 4 extension + 41 Phase 8 + 24 Phase 8b + 30 Phase 9 − 2 Phase 9b)
 
 **Required**: Add transpiler code generation tests
 
@@ -300,10 +376,10 @@ using dict_t = std::unordered_map<int, std::tuple<float, float>>;
 
 ## Success Criteria
 
-- [ ] `scattered_database.py` compiles and runs without errors
-- [ ] All 675 existing Python tests still pass
-- [ ] New transpiler tests added for code generation (>20 new tests)
-- [ ] Generated C++ conforms to FCPP patterns and conventions
+- [ ] `scattered_database.py` compiles and runs without errors (blocking: dict.keys() in expression context, list comprehensions)
+- [x] All existing Python tests still pass (817/817 as of 2026-05-30)
+- [x] New transpiler tests added for code generation (29 new from Phases 4-7; total transpiler tests = 200+)
+- [x] Generated C++ conforms to FCPP patterns and conventions (using decls, constexpr, set_t, structured bindings)
 - [ ] Documentation updated with transpiler capabilities and limitations
 - [ ] Example-run instructions work end-to-end
 
@@ -336,12 +412,16 @@ using dict_t = std::unordered_map<int, std::tuple<float, float>>;
 
 ## Timeline Estimate
 
-| Phase     | Tasks                          | Estimated Time | Actual Time |
-| --------- | ------------------------------ | -------------- | ----------- |
-| 1         | Add `node`, using declarations | 2 days         | TBD         |
-| 2         | Extract constants, fix syntax  | 3 days         | TBD         |
-| 3         | Generate types, validation     | 2 days         | TBD         |
-| **Total** |                                | **~1 week**    | TBD         |
+| Phase     | Tasks                                          | Estimated Time | Actual Time  |
+| --------- | ---------------------------------------------- | -------------- | ------------ |
+| 1         | Using declarations                             | 2 days         | 1 day ✅     |
+| 2         | Module constants + Python-to-C++ syntax        | 3 days         | 1 day ✅     |
+| 3         | set_t type alias                               | 2 days         | 1 day ✅     |
+| 4         | Missing binary operators (|, &, ^, //, <<, >>) | 0.5 days       | < 1 hr ✅    |
+| 5         | `in` / `not in` / `is` / `is not`              | 0.5 days       | < 1 hr ✅    |
+| 6         | Generic for-loop (non-range)                   | 1 day          | < 1 hr ✅    |
+| 7         | Collection constructors + set literal + .get() | 1 day          | < 1 hr ✅    |
+| **Total** |                                                | **~11 days**   | **~1 day**   |
 
 ---
 

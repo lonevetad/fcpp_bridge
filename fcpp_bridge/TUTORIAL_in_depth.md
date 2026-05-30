@@ -116,6 +116,22 @@ compiler = Compiler(
 )
 ```
 
+> **Config file shortcut**: all parameters above are optional when `fcpp_bridge.yaml` is present.
+> `Compiler()` (no args) reads every setting from the config; explicit args always override it.
+> `Transpiler()` reads `cpp_standard` from the same file, keeping transpiler code-gen and the
+> compiler `-std=` flag in sync automatically.
+>
+> ```yaml
+> # fcpp_bridge.yaml  (place at project root)
+> cpp_standard: cpp17    # single source of truth for both components
+> compiler:
+>   gcc_path: /usr/bin/g++-12
+>   opt_level: "3"
+>   extra_includes: ["/path/to/fcpp/src"]
+> ```
+>
+> Accepted `cpp_standard` values: `cpp14`, `cpp17` (default), `cpp20`, `cpp26`.
+
 ### 3.2 Per-compilation flag overrides
 
 `Compiler.compile(cpp_file, output_binary, extra_flags=[...])` appends
@@ -959,26 +975,20 @@ manager = DeviceManager(output_channel=ch)
 
 ---
 
-## 11.1 Known Transpiler Limitations
+## 11.1 Transpiler Status
 
-The transpiler works well for the production-ready examples (hop-channel, collection, worker-role patterns). However, when writing complex aggregate functions that:
+The transpiler refactor (Phases 1–9b) is complete. All previously known code-generation issues are resolved:
 
-- Directly invoke FCPP coordination primitives in compute body
-- Use module-level constants (e.g., `COMM = 150.0`, `STATUS_*` enums)
-- Define custom types with nested collections (e.g., `Dict[K, Tuple[...]]`)
+- **FCPP primitives** — automatic `using`-declarations and `CALL` macro injection for all coordination primitives.
+- **Module-level constants** — emitted as `constexpr` declarations in generated C++.
+- **Python syntax** — `True`/`False`/`None`, Python-only operators, and `in`/`not in`/`is`/`is not` are correctly mapped.
+- **Collection types** — `Dict`, `List`, `Set`, `Tuple`, `FrozenSet` annotations translate to C++ type aliases.
+- **Comprehensions** — list/set/dict comprehensions translate to immediately-invoked lambda expressions.
+- **C++ standard** — `cpp14`, `cpp17` (default), `cpp20`, `cpp26` — set once in `fcpp_bridge.yaml` and used by both the transpiler and compiler automatically.
 
-You may encounter code generation limitations (being fixed in [TRANSPILER_CODEGEN_REFACTOR_PLAN.md](./development_history/TRANSPILER_CODEGEN_REFACTOR_PLAN.md)):
+The CALL-counter alignment rule (all FCPP primitives called before `match/case` branches) remains **best practice** — it is a deliberate FCPP design constraint, not a transpiler workaround.
 
-**Common symptoms**:
-
-- `undefined reference` errors for module-level constants
-- `undeclared identifier` for coordination primitives (e.g., `bis_distance`)
-- Type mismatch errors for complex state structures
-- Python syntax appearing in generated C++ (e.g., `False` instead of `false`)
-
-**Workaround**: Use the simple patterns demonstrated in `worker_role_assignment.py` — call all primitives **before** the `match/case` block, keep constants as inline literals or named class attributes, and stick to basic state types. The CALL-counter alignment rule (all primitives first) is both good practice and a natural workaround for transpiler limitations.
-
-**Status**: Refactor planned for ~1 week. Tracking issue: `TRANSPILER_CODEGEN_REFACTOR_PLAN.md`.
+See [TRANSPILER_CODEGEN_REFACTOR_PLAN.md](./development_history/TRANSPILER_CODEGEN_REFACTOR_PLAN.md) for the complete refactor history (817/817 tests passing).
 
 ---
 

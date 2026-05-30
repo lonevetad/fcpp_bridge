@@ -496,3 +496,75 @@ Before going with the "Option B", I need to clarify Your open question: the "FCP
 So, after assessing that I won't face any licence issues by choosing the "Option B" (create/copy the "fcpp"'s license, or do whatever it's needed to be legally compliant: I guess it's best to copy their "Apache License"), then go with the "Option B".
 
 
+
+------------------------------------------------
+------------------------------------------------
+------------------------------------------------
+
+
+Include to this plan (and the remaining Phases) the "Remaining gaps" mentioned: update the plan and the relevant ".md" files about this inclusion, then proceed to fix those gaps taking inspiration from the already existing solutions (or by applying the best modern approaches and engineering design; in case of the latter, then add a refactoring to the plan). Save the MEMORY after each step.
+
+
+
+
+The Phase 4 is missing the "short-circuit boolean operators" (i.e. the C++ "&&" and "||") and the "bitwise negation": add these elements wherever they are relevant (for example, but not limited to: Python DSL, transpilation and C++ code generation).
+
+
+
+
+
+About the "dict.keys()", "dict.values()" and "list comprehension" cases mentioned in the step 9 "Optional Next Step": add those parts of the Python languages (the first two are dictionaries' methods and the last one is a "syntactic sugar") to the Python DSL, the transpilation and the C++ code generation, by intercepting those parts in the "source code to be transpiled" (add type checking of the dict/iterable they are used upon) and manage them adequately. If something is not explicitly mentioned in the plan, ask me rather than skipping it.
+Update the relevant ".md" files (write new ones if necessary, like a new one under the folder "development_history") and MEMORY.
+
+
+
+
+
+Let the "C++ version" be a configurable value among an enumeration of allowed values; defaults to the "C++17" choice; refactor all involved classes and files accordingly (even the tests), then update the relevant ".md" files, add a new file inside the "development_history" folder,; lastly, update MEMORY.
+
+
+
+
+
+I found the concrete patterns in the examples:
+
+-) set(local_db.keys()) | {self_uid()} — scattered_database.py
+-) list(self_state.local_db.keys()) — iteratively_area_discovery.py
+-) [i for i in range(N) if i not in known] — scattered_database.py
+-) [tc for tc in tile_shapes if tc not in tile_owner] — area_discovery.py
+-) Dict/set comprehensions appear in simulation code: {i: {} for i in range(N)}
+Three design decisions aren't specified in the plan:
+
+Your questions have been answered: 
+    "For dict.keys() / dict.values() in expression context, what C++ standard should the generated code target?"
+    ="Let the "C++ version" be a configurable value among an enumeration of allowed values; defaults to the "C++17" choice; refactor all involved classes and files accordingly (even the tests), then update the relevant ".md" files, add a new file inside the "development_history" folder,; lastly, update MEMORY.",
+    "For type-checking dict.keys() / dict.values(), what should be the source of the key/value element type?"
+    ="Both (prefer annotations, fallback to decltype)",
+    "Which comprehension forms should be supported?"
+    ="List + Set + Dict comprehensions".
+You can now continue with these answers in mind.
+
+
+
+
+Add the "CPP14" and "CPP26" entries in the "CppStandard" enum, then update all files and processes that relies on that enum or on the related gcc/g++ compiler flag.
+Update the relevant ".md" files (write new ones if necessary, like a new one under the folder "development_history") and MEMORY.
+
+
+
+
+Great!
+Create a "config" file (Either YAML or JSON [are there other widespread standards? "XML"?]) in which the user might define all default configurations used in this project (for example: the aforementioned C++ version, which is encoded in the enum named "CppStandard").
+Add the loading of that configuration file (the YAML one takes precedence over the others, and the JSON one comes second in the matter of precedences) upon startup (both cases: transpilation of a Python file which respect the DSL constraints and parsing a string beforehand), so that the user is not forced to constantly define non-default values via command line arguments or hardcoded values.
+(NOTE: ask me whenever a requirement seems contradictory or hard to understand/decide.)
+Then, Update the relevant ".md" files (write new ones if necessary, like a new one under the folder "development_history") and MEMORY.
+
+
+
+
+
+During your thinking, you asked yourself: "... whether the transpiler's C++ standard setting and the compiler's standard flag should be unified or kept separate, since they serve different purposes even if they ideally match." They must be unified, since transpilation and compilation needs to communicate, and communication might fail if those two steps disagree on standards (i.e., use different C++ versions). So, keep them unified: let the user define the C++ version once, and use that value for both the transpilation and the compilation.
+
+
+
+

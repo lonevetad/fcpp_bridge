@@ -10,6 +10,7 @@ from fcpp_bridge.log import get_logger
 from .cpp_code_builder import CppCodeBuilder
 from .python_ast_visitor import PythonAstVisitor
 from ._constants import _FCPP_PRIMITIVES
+from ._cpp_standard import CppStandard
 
 _log = get_logger(__name__)
 
@@ -17,9 +18,21 @@ _log = get_logger(__name__)
 class Transpiler:
     """Main transpiler class: Python DSL → C++ code."""
 
-    def __init__(self, aggregate_class: Type):
-        """Initialize transpiler with aggregate function class."""
+    def __init__(self, aggregate_class: Type,
+                 cpp_std: Optional[CppStandard] = None):
+        """Initialize transpiler with aggregate function class.
+
+        Args:
+            aggregate_class: The Python aggregate function class to transpile.
+            cpp_std: Target C++ standard for generated code.  When *None*
+                     (default) the value is read from ``fcpp_bridge.yaml`` /
+                     ``fcpp_bridge.json`` if present, otherwise C++17 is used.
+        """
+        if cpp_std is None:
+            from fcpp_bridge.config import load_config
+            cpp_std = load_config().cpp_standard
         self.aggregate_class = aggregate_class
+        self.cpp_std: CppStandard = cpp_std
         self.state_type: Optional[CppType] = None
         self._validate()
 
@@ -33,6 +46,28 @@ class Transpiler:
             AggregateValidator.get_state_type(self.aggregate_class)
         )
 
+    def _extract_module_constants(self) -> list[str]:
+        """Collect simple module-level constants for generated C++ code."""
+        module = inspect.getmodule(self.aggregate_class)
+        if module is None:
+            return []
+
+        decls: list[str] = []
+        for name, value in sorted(module.__dict__.items()):
+            if not name.isupper() or name.startswith("_"):
+                continue
+            if isinstance(value, bool):
+                decls.append(
+                    f"constexpr bool {name} = {'true' if value else 'false'};")
+            elif isinstance(value, int):
+                decls.append(f"constexpr int {name} = {value};")
+            elif isinstance(value, float):
+                decls.append(f"constexpr double {name} = {value};")
+            elif isinstance(value, str):
+                escaped = value.replace('\\', '\\\\').replace('"', '\\"')
+                decls.append(f'constexpr const char {name}[] = "{escaped}";')
+        return decls
+
     def generate(self) -> str:
         """Generate C++ code for this aggregate function."""
         _log.debug("Generating C++ for %s", self.aggregate_class.__name__)
@@ -43,18 +78,29 @@ class Transpiler:
         for inc in (self.state_type.required_includes or []):
             builder.add_include(inc)
 
+        module_constants = self._extract_module_constants()
+        for decl in module_constants:
+            builder.add_declaration(decl)
+
         if self.state_type.is_struct and self.state_type.fields:
             builder.add_declaration(self.state_type.cpp_declaration())
 
-        compute_code, used_prims = self._generate_compute()
+        compute_code, used_prims, uses_frozenset, uses_ranges = self._generate_compute()
         for prim in used_prims:
             header = _FCPP_PRIMITIVES.get(prim)
             if header:
                 builder.add_include(header)
+
+        if uses_frozenset:
+            builder.add_include("<set>")
+            builder.add_declaration("using set_t = std::set<int>;")
+        if uses_ranges:
+            builder.add_include("<ranges>")
+
         builder.add_helper(compute_code)
 
         initial_code = self._generate_initial_state()
-        main_agg = self._generate_main_aggregate(initial_code)
+        main_agg = self._generate_main_aggregate(initial_code, used_prims)
         builder.set_main_aggregate(main_agg)
 
         return builder.build()
@@ -77,7 +123,7 @@ class Transpiler:
         state_type_name = self.state_type.name if self.state_type else "double"
         method = getattr(self.aggregate_class, "compute")
 
-        cpp_body, used_prims = self._transpile_method_body(method, {
+        cpp_body, used_prims, uses_frozenset, uses_ranges = self._transpile_method_body(method, {
             "self_state": "self_state",
             "state": "self_state",
             "s": "self_state",
@@ -94,7 +140,7 @@ class Transpiler:
             f"{cpp_body}\n"
             f"}}\n"
         )
-        return code, used_prims
+        return code, used_prims, uses_frozenset, uses_ranges
 
     def _transpile_method_body(self, method, param_remap: dict):
         """Transpile the full body of a Python method to C++ statements."""
@@ -119,7 +165,7 @@ class Transpiler:
         # Pass the function's globals so constant chains (e.g. IntEnum .value
         # references) can be folded to integer literals in C++ case labels.
         fn_globals = getattr(method, "__globals__", {})
-        visitor = PythonAstVisitor(constants=fn_globals)
+        visitor = PythonAstVisitor(constants=fn_globals, cpp_std=self.cpp_std)
         cpp_body = visitor.transpile_statements(stmts)
 
         for py_name, cpp_name in param_remap.items():
@@ -128,20 +174,29 @@ class Transpiler:
         if not cpp_body.strip():
             cpp_body = "    return self_state;"
 
-        return cpp_body, visitor.used_primitives
+        return cpp_body, visitor.used_primitives, visitor.uses_frozenset, visitor.uses_ranges_header
 
-    def _generate_main_aggregate(self, initial_expr: str) -> str:
+    def _generate_main_aggregate(self, initial_expr: str, used_prims: list = None) -> str:
         """Generate the main FCPP aggregate function."""
         state_type_name = self.state_type.name if self.state_type else "double"
         class_name = self.aggregate_class.__name__
+
+        # Generate using declarations for coordination primitives
+        using_declarations = ""
+        if used_prims:
+            using_decls = []
+            for prim in set(used_prims):
+                using_decls.append(f"    using fcpp::coordination::{prim};")
+            if using_decls:
+                using_declarations = "\n" + \
+                    "\n".join(sorted(using_decls)) + "\n"
 
         return f"""
 // Generated FCPP aggregate program — {class_name}
 namespace fcpp_generated {{
 
 AGGREGATE_TEMPLATE(main) : void {{
-    using state_t = {state_type_name};
-
+    using state_t = {state_type_name};{using_declarations}
     // Initialize or retrieve persistent state
     auto& current_state = old(CALL, static_cast<state_t>({initial_expr}));
 
