@@ -205,3 +205,83 @@ def test_compiler_config_defaults():
     assert c.gcc_path == "g++"
     assert c.opt_level == "2"
     assert c.extra_includes == []
+
+
+# ---------------------------------------------------------------------------
+# network_size
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_default_network_size(tmp_path):
+    cfg = load_config(start_dir=tmp_path)
+    assert cfg.network_size == 20
+
+
+def test_load_config_yaml_network_size(tmp_path):
+    _write_yaml(tmp_path, "network_size: 50\n")
+    assert load_config(start_dir=tmp_path).network_size == 50
+
+
+def test_load_config_json_network_size(tmp_path):
+    _write_json(tmp_path, {"network_size": 8})
+    assert load_config(start_dir=tmp_path).network_size == 8
+
+
+def test_network_size_zero_is_valid(tmp_path):
+    _write_yaml(tmp_path, "network_size: 0\n")
+    assert load_config(start_dir=tmp_path).network_size == 0
+
+
+# ---------------------------------------------------------------------------
+# area_size
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_default_area_size(tmp_path):
+    cfg = load_config(start_dir=tmp_path)
+    assert cfg.area_size == (500.0, 500.0)
+
+
+def test_load_config_yaml_area_size(tmp_path):
+    _write_yaml(tmp_path, "area_size: [1000.0, 250.0]\n")
+    cfg = load_config(start_dir=tmp_path)
+    assert cfg.area_size == (1000.0, 250.0)
+
+
+def test_load_config_json_area_size(tmp_path):
+    _write_json(tmp_path, {"area_size": [300.0, 400.0]})
+    cfg = load_config(start_dir=tmp_path)
+    assert cfg.area_size == (300.0, 400.0)
+
+
+def test_load_config_area_size_integer_values(tmp_path):
+    """Integer elements in area_size are coerced to float."""
+    _write_yaml(tmp_path, "area_size: [200, 150]\n")
+    cfg = load_config(start_dir=tmp_path)
+    assert cfg.area_size == (200.0, 150.0)
+    assert isinstance(cfg.area_size[0], float)
+
+
+def test_load_config_area_size_wrong_length_raises(tmp_path):
+    _write_yaml(tmp_path, "area_size: [100.0]\n")
+    with pytest.raises(ValueError, match="area_size"):
+        load_config(start_dir=tmp_path)
+
+
+def test_load_config_area_size_non_numeric_raises(tmp_path):
+    _write_yaml(tmp_path, "area_size: [100.0, hello]\n")
+    with pytest.raises((ValueError, TypeError)):
+        load_config(start_dir=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# BridgeConfig dataclass defaults
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_config_default_network_size():
+    assert BridgeConfig().network_size == 20
+
+
+def test_bridge_config_default_area_size():
+    assert BridgeConfig().area_size == (500.0, 500.0)

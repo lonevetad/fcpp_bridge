@@ -568,3 +568,59 @@ During your thinking, you asked yourself: "... whether the transpiler's C++ stan
 
 
 
+
+
+ALSO ALSO
+.... Shouldn'T the "calculation of the node's storage new value(s)" be performed at the end of the "main aggregate" function, alongside the *actual node's storage field-by-field setting*, as like as it is already done in some examples?
+I SHALL RE-DOWNLOAD THE FCPP EXERCISES AND FEED THEM TO Claude Code TO LET HIM KNOW THE STRUCTURE OF AN ACTUAL FCPP PROGRAM
+
+
+
+
+
+
+
+
+
+
+
+****************************
+****************************
+****************************
+
+
+Da risolvere
+
+-) la generazione del codice C++ dovrebbe riempire un template, il quale deve essere estratto dagli esempi già forniti da Giorgio e da me stesso
+... e il template deve anche prevedere la definizione di 0+ funzioni di supporto e 0+ f.d.s. aggregate
+
+-) usare jinja
+
+-) manca infatti una esplicita definizione della "main aggregate function"
+
+.. insomma, dovrei sostanzialmente replicare il
+
+-) come viene gestito lo storage, nel codice compilato? Sembra del tutto assente ...
+
+-) again, a che serve la simulazione nel sorgente Python?
+Non dovrebbe bastare definire:
+-- la funzione aggregata main, e ogni altra funzione addizionale di supporto (similarmente a quanto avviene negli esempi di Giorgio)
+-- la definizione del tipo di storage
+-- il modo, nel sorgente python, in cui si definisce la ricezione ed il consumo degli "node updates" prodotti dell'esecuzione del compilato c++
+-- 
+
+-) come vengono traspilati "field"?
+-) le classi che Verrano usate come "tipo di dato esportato da una funzione aggregata" non dovrebbe essere definito come " using nome_funzione_t = make_tuple<...> ;" ?
+
+-) aggiungere la dimensione iniziale del network e la dimensione dell'area alle "cose configurabili"
+
+-) invece di invocare gli "esempi " direttamente e richiedere che esso venga auto-letto, traspilato, etc., non converrebbe invece invocare un singolo punto di accesso e fornirgli il nome/path del file da "digerire, transpilare,
+ etc."
+
+
+****************************
+****************************
+****************************
+
+
+

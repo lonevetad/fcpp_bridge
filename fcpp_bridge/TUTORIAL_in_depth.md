@@ -16,12 +16,14 @@ production-quality simulation class that supports:
 
 ## 1. Prerequisites
 
-Same as the simple tutorial plus:
+Same as the simple tutorial (Python 3.10+, g++ ≥ 9, FCPP headers, PyYAML ≥ 6.0,
+Jinja2 ≥ 3.0) plus:
 
 ```bash
 # From the repository root — one time only:
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
+# PyYAML and Jinja2 are installed automatically by the command above
 ```
 
 > **Making `import fcpp_bridge` work**: install in editable mode once — no prefix needed after that:

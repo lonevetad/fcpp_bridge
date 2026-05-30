@@ -28,6 +28,8 @@ The tutorial walks through every stage of the pipeline: Python DSL → C++ → c
 | ---------------------------- | --------------------------------------------------------- |
 | Python 3.10+                 | `python --version`                                        |
 | `fcpp_bridge` installed      | `pip install -e .` from repo root (see note below)        |
+| PyYAML ≥ 6.0                 | Auto-installed by `pip install -e .`                      |
+| Jinja2 ≥ 3.0                 | C++ code generation templates — auto-installed by `pip install -e .` |
 | FCPP C++ framework headers   | Clone from `github.com/fcpp/fcpp`; set `FCPP_SRC` env var |
 | `g++` ≥ 9 with C++14 support | `g++ --version`                                           |
 | (Optional) `lld` linker      | Faster linking on Linux                                   |

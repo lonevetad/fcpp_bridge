@@ -8,6 +8,8 @@ logs/
 
 fcpp/
 fcpp/*
+fcpp_exercises/*
+fcpp-exercises
 
 # Generated C++ code
 cpp_transpiled/

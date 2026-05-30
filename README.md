@@ -14,6 +14,8 @@ swarm via JSON IPC — all from Python.
 | g++ with C++14 support | `g++ --version`                                                |
 | CMake ≥ 3.14           | `cmake --version` (optional — only needed by `CmakeGenerator`) |
 | FCPP C++ library       | Apache 2.0 — see setup below                                   |
+| PyYAML ≥ 6.0           | Installed automatically by `pip install -e .`                  |
+| Jinja2 ≥ 3.0           | Template engine for C++ code generation — installed automatically by `pip install -e .` |
 
 ### FCPP Library Setup
 
@@ -102,7 +104,8 @@ compiler:
 When `Transpiler()` or `Compiler()` are constructed without explicit arguments they load the nearest config file automatically.
 Passing an explicit value always overrides the config — the two components are always kept in sync.
 
-> **PyYAML**: YAML support requires `pyyaml>=6.0`, which is installed automatically by `pip install -e .`.
+> **PyYAML**: YAML support requires `pyyaml>=6.0`, installed automatically by `pip install -e .`.
+> **Jinja2**: C++ code generation uses `Jinja2>=3.0` for template rendering, installed automatically by `pip install -e .`.
 
 ## Running Examples
 

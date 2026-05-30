@@ -65,6 +65,20 @@ def _parse_std(raw_value: object) -> CppStandard:
     return result
 
 
+def _parse_area_size(raw_value: object) -> "tuple[float, float]":
+    """Parse area_size from config: accepts a 2-element list/tuple."""
+    try:
+        items = list(raw_value)  # type: ignore[arg-type]
+        if len(items) != 2:
+            raise ValueError
+        return (float(items[0]), float(items[1]))
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"Invalid area_size {raw_value!r} in config. "
+            "Expected a 2-element list of numbers, e.g. [500.0, 500.0]"
+        ) from None
+
+
 def _build_config(raw: dict) -> "BridgeConfig":
     from .bridge_config import BridgeConfig, CompilerConfig
 
@@ -84,7 +98,19 @@ def _build_config(raw: dict) -> "BridgeConfig":
         extra_includes=list(c_raw.get("extra_includes") or []),
     )
 
-    return BridgeConfig(cpp_standard=cpp_std, compiler=compiler)
+    network_size = int(raw["network_size"]) if "network_size" in raw else 20
+    area_size = (
+        _parse_area_size(raw["area_size"])
+        if "area_size" in raw
+        else (500.0, 500.0)
+    )
+
+    return BridgeConfig(
+        cpp_standard=cpp_std,
+        compiler=compiler,
+        network_size=network_size,
+        area_size=area_size,
+    )
 
 
 def load_config(start_dir: Optional[Path] = None) -> "BridgeConfig":

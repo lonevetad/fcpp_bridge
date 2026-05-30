@@ -20,6 +20,17 @@
 #           also accepts "17", "c++17", etc.)
 cpp_standard: cpp17
 
+# Default initial number of nodes in a simulation.
+# AbstractExample subclasses can call load_config().network_size to use this
+# value instead of hardcoding a constant.
+network_size: 20
+
+# Default simulation area as [width, height] in the same units used by FCPP's
+# geometry primitives (e.g. rectangle_walk).  Individual examples that need a
+# non-square or differently-scaled area can ignore this and use their own
+# module-level AREA constant.
+area_size: [500.0, 500.0]
+
 compiler:
   # Directory where compiled binaries are cached.
   cache_dir: build
