@@ -44,6 +44,30 @@ class AbstractExample(ABC):
     on_round_complete(round_num, snapshot)   — write extra per-round data
     """
 
+    # ── Config-backed defaults ────────────────────────────────────────────────
+
+    @property
+    def default_network_size(self) -> int:
+        """Default node count read from ``fcpp_bridge.yaml`` (``network_size`` key).
+
+        Subclasses that want a fixed count should just use a module-level
+        constant.  This property is useful when you want to let the end-user
+        tune the size via the config file without touching the source.
+        """
+        from fcpp_bridge.config import load_config
+        return load_config().network_size
+
+    @property
+    def default_area_size(self) -> Tuple[float, float]:
+        """Default ``(width, height)`` read from ``fcpp_bridge.yaml`` (``area_size`` key).
+
+        Returned as a ``(width, height)`` tuple in the same units as FCPP's
+        geometry primitives.  Individual examples that need non-default
+        dimensions should use their own module-level ``AREA`` constant instead.
+        """
+        from fcpp_bridge.config import load_config
+        return load_config().area_size
+
     # ── Required properties / abstract methods ────────────────────────────────
 
     @property

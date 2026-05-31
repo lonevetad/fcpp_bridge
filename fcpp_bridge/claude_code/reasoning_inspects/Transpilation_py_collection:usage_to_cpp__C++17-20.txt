@@ -1,0 +1,300 @@
+Summary of Work to Do
+Phase A: CppStandard enum + propagation
+
+Create fcpp_bridge/transpiler/_cpp_standard.py with CppStandard enum
+Update PythonAstVisitor.__init__ to accept cpp_std: CppStandard
+Update Transpiler.__init__ to accept cpp_std: CppStandard
+Pass cpp_std through _transpile_method_body to the visitor
+Export CppStandard from transpiler/__init__.py
+Update tests to verify the default C++17 behavior and optionally test C++20
+Phase B: Type annotation tracking in PythonAstVisitor
+
+Add a type_env dictionary to the visitor that maps variable names to their type information (tuples for dict key/value types, list/set element types)
+Parse type annotations in visit_AnnAssign and populate this environment
+Still working through the type parsing logic...
+Phase C: dict.keys() / dict.values() in expression context
+
+Intercept these method calls in visit_Call and generate either an IIFE for C++17 or use std::views::keys/values for C++20
+Pull type information from the annotation environment when available, falling back to decltype otherwise
+Phase D: List, Set, Dict comprehensions
+
+Implement visitor methods for each comprehension type that expand them into IIFEs
+Now I need to set up the C++ standard enum to track which language features are available. I'm creating an enum that holds the C++ version and provides helper methods to check capabilities like range support, then threading this through the transpiler and visitor initialization.
+
+For type annotation tracking, I'm building a system where Python type hints get converted to their C++ equivalents—mapping things like Dict[int, float] to a map structure with properly typed keys and values, and List[T] to vectors.
+
+When the visitor encounters an annotated assignment, it needs to parse the annotation AST node, which could be a Subscript node containing the container type and its element types, then store that mapping in the type environment so it can be referenced later.
+
+I need a helper function...
+
+Writing type annotation parser... I'm considering whether to use std::views::keys as a range adaptor in C++20, but the constructor for set_t needs iterator pairs rather than a view directly, so I'd need to wrap it in an IIFE that extracts the begin and end iterators from the keys view.
+
+For C++17, I'd fall back to creating vectors of keys and values through an IIFE, while C++20 can use the more efficient view approach. The views work well with most use cases—constructing sets, vectors, or getting the length—without needing to materialize the full collection upfront.
+
+The tricky part with C++17 is that embedding an IIFE directly in a function call like set(d.keys()) would invoke it twice (once for .begin() and once for .end()), which is wasteful. I need to think through whether a single temporary variable or a different approach would be cleaner here. the IIFE twice. We need to either wrap the whole set(d.keys()) pattern in another IIFE, or make d.keys() return something that can be iterated once. The cleanest C++17 approach is to special-case compound patterns like set(d.keys()) and list(d.keys()) by generating IIFEs that build the container directly, or just have d.keys() return a vector as a standalone expression since it's rarely used alone anyway.
+
+But the user wants d.keys() to work in any expression context — assigned to variables, passed to functions, etc. So I'll generate d.keys() as an IIFE returning a std::vector<key_t>. When nested in set(...), it'll call the IIFE twice through .begin() and .end(), which is semantically fine since the IIFE just reads d by reference and is idempotent, just slightly inefficient. Writing the pattern matcher... Writing helper functions...
+
+Actually, I'm realizing the special-casing approach gets messy quickly—what if someone chains operations like list(d.keys()) + something? The cleaner approach is to detect d.keys() at the call site and emit an inline function that safely captures the dictionary, then let the outer set() or list() call handle the conversion. This way the IIFE is self-contained and works correctly regardless of context. call twice but views are lazy and O(1) to create, so that's fine too. I'll go with the IIFE approach for C++17 and views for C++20 — simple and consistent.
+
+For type annotations on d.keys(), if I have something like d: Dict[int, float], I need to emit a std::vector with the key type. Without annotations, I can fall back to decltype(d.begin()->first). To make this work, I need to track type information from annotated assignments and function parameters, then have a helper that converts Python types to their C++ equivalents.
+
+Actually, annotation tracking gets complicated fast — function parameters especially require walking the dataclass fields, which aren't accessible in the AST visitor. For practical purposes, I'll focus on local variable annotations like local_db: Dict[int, str] = ... and rely on decltype for attribute chains like self_state.local_db.
+
+Now I need to build a helper that parses Python type annotations into C++ types. I'm creating a TypeInfo dataclass to hold the parsed information, then writing a function that walks the annotation AST node and extracts the C++ type string along with any generic parameters like dict keys and values.
+
+Defining the helper function... Continuing the type parsing logic...
+
+Now I'm handling tuple types by extracting the element types and constructing a std::tuple with all of them, then falling back to an unknown type if nothing matches. In the visitor method, I'm tracking type annotations on variable assignments by parsing them and storing the type information.
+
+Defining helper methods...
+
+Now I'm moving into list comprehension handling, which needs to expand into a C++17 IIFE that builds a vector, iterates through the source, applies any conditions, and collects matching elements.
+
+The tricky part is determining the element type without having the loop variable in scope yet—I can extract it from the iterator itself using decltype(*std::begin(iter)), but that only works when the expression is just the identity function. For general transformations like [f(x) for x in iter], I need a different approach since I can't declare the vector without knowing what type f(x) produces.
+
+The practical solution is to handle common cases separately: simple ranges give me int, iterating over a container lets me deduce the element type from the iterator, and for arbitrary expressions I can use the first element as a type seed or wrap the logic in a lambda to capture the type implicitly. Refining the type deduction approach...
+
+The key insight is that decltype evaluates at compile-time, so even if the container is empty at runtime, the type inference still works perfectly. I'm verifying this with a concrete example: wrapping the comprehension logic in an IIFE that uses a helper lambda to capture the element type, then builds the result vector with that inferred type.
+
+For range-based loops, I can optimize since range(N) always produces integers. For general iterables like tile_shapes, I'm applying the same pattern with decltype to extract the element type from dereferencing the begin iterator.
+
+Continuing with the general iterable pattern... Writing set comprehension logic... I need to separate the concerns here — set comprehensions shouldn't be locked to int types. I'll introduce a distinct uses_set flag that triggers the #include <set> header without forcing the set_t alias, letting comprehensions infer their element type dynamically while keeping the type system flexible. just adds #include <set> (no set_t alias). Then:
+
+frozenset() / set() / set literals → uses_frozenset = True → using set_t = std::set<int>; #include <set>
+Set comprehensions → uses_set = True → #include <set> (no alias)
+Wait, but if both are used, we'd include <set> twice — need to deduplicate. Actually CppCodeBuilder.add_include probably deduplicates. Let me check.
+
+Actually, looking at the existing code, builder.add_include("<set>") is called if uses_frozenset. The CppCodeBuilder likely deduplicates. Let me just:
+
+For set comprehensions: emit std::set<elem_t> and add <set> include
+Track a separate flag for set comprehensions
+Actually, I'm overcomplicating this. The simplest approach is to always emit std::set<_elem_t> for set comprehensions and set uses_frozenset = True to trigger the include, even if the set_t alias won't actually be used in that case. I'm settling on a cleaner approach: add a separate uses_set_header flag that just includes the <set> header without the misleading set_t alias, keeping uses_frozenset for cases where the full alias is actually needed. Then in the transpiler, I'll check for set comprehensions and set that flag accordingly.
+
+Now I'm working through dict comprehensions, which use a similar lambda pattern but with std::map instead, capturing both key and value types with the decay trick to handle the expressions properly. Writing the dict comprehension handler... I'm looking at how comprehensions with multiple generators and conditions translate to C++, using nested loops and conditional checks. Now I need to plan out the implementation structure and start writing the actual transpiler code.
+
+I'm setting up the file organization: creating a new enum for C++ standard versions, exporting it from the main module, and then modifying the AST visitor to track type information and handle the various comprehension patterns.
+
+Then I need to wire everything through the transpiler core to propagate the C++ standard setting and manage the header includes for sets and maps, followed by adding comprehensive tests for both the visitor and the full transpilation pipeline.
+
+Defining the C++ standard enum... Defining the type mapping and helper structures... Continuing the annotation function...
+
+For subscripted types like Dict or Mapping, I'm extracting the key and value types from the tuple slice, handling Python 3.8's Index wrapper for compatibility, then constructing the corresponding std::map type with both key and value type information.
+
+For List types, I'm pulling out the element type and building a std::vector wrapper.
+
+For Set and FrozenSet, I'm doing the same extraction and mapping to std::set.
+
+For Tuple types, I'm checking if the slice is itself a tuple to handle the element types...
+
+Handling type annotations... I need to import CppStandard at the top of the file, then update the visit_AnnAssign method to track type annotations in a type environment dictionary so I can look up key and value types later when processing comprehensions and dict methods. Adding helper methods to look up those types... I'm completing the element type lookup function to handle lists and sets, returning either the annotated C++ type or using decay_t with decltype to infer it from the container's iterator. Now I need to add special handling in the visit_Call method for dictionary methods like keys and values, inserting logic before the final return statement to detect and transform these method calls appropriately.
+
+Adding helper methods to emit C++ code for dict.keys(), dict.values(), and dict.items() in expression contexts, using std::views::keys when available or falling back to a lambda that manually collects the keys into a vector... I'm realizing the issue—obj is the visited C++ expression string, not the original Python variable name, so I can't directly look it up in type_env to get the key or value types. I need to track back to the original Python identifier to resolve the type information correctly.
+
+The solution is to pass both the C++ string and the original AST node to the helper function, so I can use the AST node to look up type information while using the C++ string for code generation.
+
+Defining the helper function signature... I'm handling the fallback case where I can't resolve the key type directly—using decltype to infer it from the dictionary's iterator. For attribute chains like self_state.local_db.keys(), full type resolution gets complex, so for now I'll keep it simple: look up straightforward variable names in the type environment, and fall back to decltype for anything more complicated. Now I need to implement the list comprehension visitor.
+
+Implementing list comprehension support... Writing the list comprehension handler... I see the issue—the body_code needs to reference the computed expression when pushing values back, so I'm restructuring the helper function to make expr_cpp available throughout the loop body generation.
+
+Now I'm handling the different range() cases by extracting the arguments and building the appropriate C-style for loop header with the correct start, end, and step values, then tracking the loop variable as declared.
+
+Now I'm handling tuple unpacking for dictionary iteration with key-value pairs, generating a structured binding in C++, and falling back to a generic variable for other cases.
+
+Continuing with the comprehension logic...
+
+I'm realizing there's a potential issue with revisiting nodes in the visitor pattern — when I call self.visit(elt_node) inside _build_comp_body, I might be re-visiting nodes that were already processed, which could cause problems with the stateful declared_vars tracking. Though for pure expression nodes like the element itself, multiple visits should be safe since they don't modify state. The real concern is whether re-visiting the iterator expressions causes issues, but I think that's actually fine too since those are also expression-based.
+
+The trickier part is that the type inference lambda I'm generating assumes the first generator's variable is available, but I need to make sure the logic handles the variable binding correctly when building the comprehension body.
+
+For the dict.items() pattern specifically, I need to recognize when we're iterating over .items() and generate the structured binding syntax for (auto& [k, v] : d) instead of trying to unpack the pair manually.
+
+Adding special case handling...
+
+Now I'm thinking through how to handle dictionary iteration when an IIFE gets nested inside another expression—like when set(local_db.keys()) needs to generate clean C++ code. The challenge is that set() expects iterators, but local_db.keys() returns a view in Python that needs proper translation.
+
+The current approach generates the IIFE twice (once for .begin() and once for .end()), which is inefficient and produces ugly code. I should special-case patterns like set(d.keys()) and list(d.keys()) to avoid this duplication.
+
+I'm adding logic in the visit_Call method to detect when set() is called with a dictionary's .keys() or .values() method, then extract the key or value type directly and generate a cleaner set constructor without the redundant IIFE calls. Writing set construction code...
+
+Wait, I'm noticing a potential issue with my logic here. I'm calling self.visit(node.args[0].func.value) after I've already computed args by visiting all the argument nodes, but args[0] should already contain the result of visiting that first argument. Let me trace through this more carefully to make sure I'm not double-visiting or using stale values.
+
+The key insight is that for special cases like frozenset and min_hood/max_hood, I need to inspect the AST node itself before I visit the arguments, so I can apply custom visiting logic. That means I should do these special case checks before computing the args list.
+
+For set(d.keys()) and list(d.keys()), I'm applying the same pattern—checking if the single argument is a call to .keys() or .values() on the raw AST node, then handling it specially without falling through to the generic iterable handling.
+
+Now I'm thinking through how to structure this cleanly in visit_Call. The key insight is that I need to handle these dictionary view patterns early, before computing the generic args, so I can return immediately and avoid redundant processing. I'll add dedicated branches for set, list, and frozenset that check for the .keys() or .values() call pattern first, then fall back to the standard iterable handling if that pattern doesn't match. CallName branch forset, list, frozenset**: The generic args[0].begin(), args[0].end()approach already works even with an IIFE asargs[0]`, because:
+
+set_t(iife().begin(), iife().end()) — calls IIFE twice but works
+For C++20, set_t(view.begin(), view.end()) — calling view accessor twice is O(1) and correct
+The double-IIFE issue is a code quality concern but not a correctness concern. For the MVP, I'll accept it. We can optimize later with special-case patterns.
+
+Actually wait — for C++17, calling the IIFE twice IS a problem for efficiency. The IIFE builds a full vector and returns it by value — doing that twice wastes O(n) work. For FCPP aggregate functions that might run many times per round, this matters.
+
+I should special-case set, list, and frozenset at the visit_Call level to detect when they're wrapping dictionary methods and emit optimized code that avoids the double-IIFE penalty. For standalone calls like d.keys(), the IIFE is still the right approach, but when wrapped in a container constructor, I can generate the loop directly. I'm settling on accepting the double-call inefficiency for standalone d.keys() in C++17 since it's uncommon, while special-casing the frequent patterns like set(d.keys()) to avoid the redundant evaluation.
+
+Now I'm implementing this approach by creating an enum to represent the C++ standard version, with methods to check feature support like ranges and generate the appropriate compiler flags.
+
+Writing implementation code... I also need to handle the frozenset variants for dictionary keys and values, then add comprehension visitors to track types through list, set, and dict comprehensions. Finally, I'll update the transpiler core to accept a C++ standard parameter and pass it through to the visitor, while ensuring the set header inclusion is properly propagated back.
+
+Now I'm ready to start implementing these changes. I'll begin with the comprehension body builder, which needs to handle range-based loops, generic iterables, the special .items() case for dictionaries, and any conditional filters, then return the constructed body as a string.
+
+Writing comprehension handlers... Writing comprehension body logic... Writing loop generation code... Writing loop and condition logic...
+
+Now I'm thinking through the type inference approach for list comprehensions—using a lambda to deduce the element type works well when the expression only depends on the loop variable, and it handles outer scope captures through the lambda's reference capture.
+
+For multi-generator cases it gets messier, but since most real examples use single generators, I can handle that properly and fall back to auto for the more complex nested scenarios.
+
+I'm also considering edge cases like when the iterator comes from dictionary methods like keys() or values().
+
+Writing C++ code... The temporary returned from the IIFE gets its lifetime extended by the range-based for loop, so this approach is safe in C++. I should add a special case in the comprehension builder to handle d.keys() the same way we do in the for loop visitor, and I also need to think through how to handle d.items() in comprehensions since that's a common Python pattern.
+
+I'm going to implement this systematically: first setting up the C++ standard module, then updating the visitor to handle these dictionary method calls properly, followed by the core transpiler changes and tests. Before I start writing though, I need to make sure I'm handling the case where keys() or values() is wrapped by an outer call.
+
+Writing the implementation... I see the issue now — calling the IIFE twice creates iterators from two different vector objects, which is undefined behavior in C++. The special-case handling needs to come before the generic argument visiting path to avoid this broken double-IIFE pattern entirely. I'm restructuring visit_Call to check for set/list/frozenset with .keys() or .values() calls first, before falling back to the generic argument processing.
+
+Adding helper method... Writing conversion logic... Writing helper methods... Writing helper functions...
+
+Now I'm thinking through how visit_For handles the .keys() case — it checks for that pattern before falling back to the generic loop, so it correctly short-circuits. The issue is that comprehensions treat the iterator as an expression, so d.keys() inside a list comprehension would actually trigger the visit_Call handler instead of being caught by the for-loop logic.
+
+But wait, that's actually fine because the comprehension code manually generates the for loop rather than calling visit_For, so I need to make sure those special cases for .keys() and .values() are handled there too.
+
+Actually, looking back at it — when _build_comp_body_lines encounters d.keys() as the iterator, it calls self.visit(iter_node) which triggers visit_Call and returns the IIFE, then wraps it in for (auto& var : IIFE()), which works correctly. So no special handling needed there.
+
+The real issue is .items() — I need to detect that in the comprehension body generation and emit for (auto& [k, v] : d) instead of trying to iterate over d.items() directly. Let me trace through what happens when visit_Call sees .items(). Adding special case handling for dictionary methods... Adding more loop handlers... Refining the function to handle different generator patterns — checking for .items() calls with tuple unpacking to emit C++ range-based for loops with structured bindings, then moving on to handle .keys() with single variables... Handling dictionary iteration patterns... Writing loop generation code... Implementing the ListComp visitor to convert Python list comprehensions into C++ code that builds a vector, handling both range-based and iterable-based iterations with proper type inference.
+
+For single-generator cases with a simple target variable, I'm using a helper lambda to deduce the element type by calling the lambda with a dereferenced iterator, then declaring the vector with that inferred type. For more complex cases with multiple generators or tuple unpacking, I need a different strategy since static type inference becomes harder.
+
+Now I'm moving on to implement the set comprehension visitor... Writing set comprehension code...
+
+Now I'm handling dictionary comprehensions, which need to infer both key and value types from the iteration and build a std::map instead. Writing type inference code... Writing the fallback case...
+
+Actually, I realize std::map<auto, auto> won't compile in C++17, so I need a different approach for when type inference fails. Let me use decltype to handle the generic case where I can't determine the exact types from the generator target. Writing fallback logic... Writing test cases... I'm also covering set comprehensions that transform ranges and generic iterables with optional conditions, dict comprehensions that map keys to transformed values, and type annotation tracking to ensure concrete types like int and float are properly preserved through dictionary operations.
+
+For C++ standards, I need to verify that C++17 is the default, C++20 enables std::views, and the transpiler correctly passes the standard through to the generated code, plus various view-specific tests.
+
+That brings the total to around 25-30 new tests. Now I'm ready to start implementing, but first I need to clarify when to use the uses_set_header flag versus uses_frozenset — the former includes the set header without an alias, while the latter creates a type alias for std::set.
+
+Currently these flags are visitor attributes but need to flow through the transpilation pipeline. Rather than keep extending the tuple being passed around, I should create a dedicated result object...
+
+Actually, the simplest approach is to just extend the existing tuple to include both uses_frozenset and uses_set_header, then thread them through _transpile_method_body, _generate_compute, and finally generate where they're used to add the appropriate includes and declarations.
+
+But I'm realizing I also need uses_ranges for the C++20 views, and potentially other headers. Rather than keep adding individual flags, I should consolidate this into a single extra_includes list that the visitor populates as it encounters features that require additional headers.
+
+The user wants me to continue implementing the features. Let me plan the work and break it into smaller pieces.
+
+The user wants:
+
+C++ standard enum (configurable, default C++17) — affects PythonAstVisitor, Transpiler, CppCodeBuilder
+Type annotation tracking (prefer annotations, fallback to decltype)
+dict.keys() / dict.values() in expression context
+List + Set + Dict comprehensions
+Let me start with piece 1: the CppStandard enum and threading it through the classes.
+
+I'll create the _cpp_standard.py file with an enum that tracks C++ versions and their capabilities, then export it from __init__.py, and update both PythonAstVisitor and Transpiler to accept and pass the C++ standard through their initialization.
+
+I also need to add type environment tracking to the visitor so it can store and resolve generic type annotations like Dict[K, V] when converting Python code to C++, which means parsing type hints in assignments and function parameters.
+
+The tricky part is handling .keys() and .values() calls that aren't in for-loop contexts — those need special handling in visit_Call to emit either an IIFE with a vector for C++17 or use std::views for C++20.
+
+Writing code examples... Writing type deduction logic... Writing the vector initialization...
+
+For ranges, the element type is straightforward—it's always int. For identity comprehensions where I'm just collecting elements as-is, I can use std::decay_t<decltype(*iter.begin())> to extract the type. For transformations, I need to figure out the result type of the expression being applied.
+
+The cleanest approach is to create a helper lambda that takes the loop variable with auto& and returns the expression—then use decltype on a dummy call to deduce the result type without actually executing anything. This gives me the element type I need to construct the vector, and the rest of the comprehension logic follows naturally. loop uses the real expression.
+
+For range-based (where iter is range(N)):
+I'm creating a lambda that captures the expression and uses it to determine the result type, then iterates through the range and conditionally pushes matching elements into a vector.
+
+This pattern handles both identity and transform cases cleanly. The key insight is that the expression references var as an identifier, and when the visitor generates code, it emits var directly—so in a concrete example like [var*2+1 for var in collection], the generated lambda captures var as a parameter rather than from outer scope, avoiding any naming conflicts with the for-loop variable.
+
+For range-based comprehensions with conditions...
+
+Now I'm thinking through set comprehensions. The challenge is that I can't hardcode std::set<int> since the element type depends on what's being collected. I need to either use class template argument deduction with an initializer, or deduce the type from dereferencing the collection's begin iterator and wrap it in std::set<std::decay_t<decltype(...)>>.
+
+For expressions like {f(x) for x in collection}, I'm using the same lambda trick to capture the function call and deduce its return type, then building the set with that deduced type while iterating and inserting elements.
+
+Still writing set comprehension logic...
+
+For dictionary comprehensions, I need to handle key-value pairs by deducing both the key and value expression types, then populating a map during iteration.
+
+Now I'm ready to outline the implementation structure—I'll need to create a new file for the C++ standard enum and modify several existing files to integrate the transpiler logic. Now I'm ready to start implementing — first the enum definition, then updating the visitor to track type annotations from variable declarations and function parameters so I can resolve dictionary key/value types when methods like .keys() are called. Writing type mapping helper...
+
+I need to track dictionary key and value types separately since I'll need them when handling .keys() and .values() calls. Let me set up a dedicated environment dictionary that stores the C++ types for each dictionary variable, then start implementing the actual visitor class with the C++ standard parameter and type tracking.
+
+Writing the implementation... Writing C++ comprehension patterns... I need to track whether we're using std::set for comprehensions separately from the set_t alias used for frozensets, so I'll add a uses_set flag that only triggers the #include <set> header without the type alias. Writing dict comprehension logic... Writing fallback logic...
+
+I'm realizing this approach is getting unwieldy for handling multiple variables in generators, so let me focus on what actually matters in practice—the dict comprehensions that show up are mostly simple cases like creating empty maps or transforming storage items, and those don't need the full complexity I'm building out.
+
+Looking at the actual code that needs transpiling, list comprehensions are the critical piece since they appear in the aggregate function bodies, while set and dict comprehensions are less frequent but still worth supporting. The key is designing a single handler that works for comprehensions with one generator variable, which covers the common cases.
+
+I'm going to build a lambda-based approach that wraps the comprehension logic — it'll set up the result container, iterate through the generator with any conditions applied, and insert each expression into the result. The tricky part is handling different container types and generator sources like range() versus generic iterables, plus figuring out when type annotations are available to guide the transpilation.
+
+For now I'll focus on single-generator comprehensions with optional filtering, and defer the complex multi-generator cases since they're rare. Let me start implementing the actual transpiler code...
+
+Now I'm thinking about when the type environment gets populated. As the visitor walks through statements in order, by the time we encounter something like local_db.keys(), we've already processed the annotated assignment that tells us local_db is a Dict[int, Tuple[float, float]]. So I can look up the key and value types from that annotation. For function parameters with typed fields, that's more involved and I'll skip it for now — just tracking AnnAssign annotations should cover most cases.
+
+I need to implement the _python_type_to_cpp helper to map Python types to C++ equivalents...
+
+Writing the implementation... Writing annotation conversion helpers... Writing tuple and dict handling... Writing the visit method... Still writing conversion logic... Writing the values handler...
+
+The for-loop handler in visit_For directly accesses the AST without calling self.visit, so it won't trigger the new visit_Call logic for .keys() — that only activates in expression contexts. Now I need to handle comprehensions, which have their own AST structure with elt or key/value fields and a list of generators, each containing a target, iter, and optional conditions.
+
+I'm building a helper function that generates an IIFE for comprehensions, supporting single generators with simple targets (a single variable or a tuple of two variables for unpacking) and at most one if clause. The function will detect range-based iteration and generate the appropriate C++ for-loop header... Writing comprehension logic... Writing the IIFE closure... Writing comprehension templates... Writing dict comprehension overloads...
+
+Now I need to structure the implementation with a shared helper that handles the common comprehension logic, then have separate visitors for lists, sets, and dicts call into it. The key insight is that comprehension variables should be scoped within the IIFE, so I'll use a fresh declared_vars set when generating the inner expressions to avoid polluting the outer scope.
+
+Since expression visiting doesn't modify declared_vars anyway (only assignments do), I should be fine there. The tricky part is that the _expr_fn approach requires generating the expression twice—once as the lambda parameter and once in the loop body—but as long as the variable names match between them, the translation works cleanly.
+
+I'm also considering C++20 range-based comprehensions as an optimization, though I need to think through how std::ranges::to would fit into the generation strategy.
+
+Now I'm ready to implement this across three files: updating the C++ standard configuration, modifying the AST visitor to handle list comprehensions, and then updating the core transpiler with the necessary logic and tests. For edge cases like d.items() in expression context, I'll leave those unsupported for now since the for-loop case is already handled.
+
+I also need to make sure visit_AnnAssign properly tracks dictionary type annotations even when there's no assigned value, so I can look up key and value types later...
+
+Now I'm implementing the comprehension visitors, starting with list comprehensions that translate to an immediately-invoked function expression returning a vector. Writing comprehension handlers... Writing comprehension IIFE helpers... Completing the lambda function that wraps the loop and returns the accumulated result, then handling the special case where we're iterating over dictionary items with tuple unpacking to extract keys and values. Writing dict.keys() handler... Writing more iteration handlers... Writing dict comprehension handler... Writing dict comprehension code... Continuing the generic iteration case...
+
+I'm realizing the if_line_start approach for conditionals in dict comprehensions is awkward—it's cleaner to just build the body line directly with an if statement when there's a condition, or without one if there isn't. But I'm also hitting a deeper issue: when the filter condition references variables outside the iteration variable, like checking if an element isn't in some external collection, the current approach of wrapping everything in a lambda won't capture those external variables properly.
+
+Actually, wait—the outer lambda does capture by reference with [&], so variables like tile_owner are accessible inside the generated code. The for-loop variable tc is in scope within the lambda body, and the condition correctly translates to checking if tc isn't in tile_owner. The _expr_fn trick still works because it's just an identity function here, and the type deduction pulls the element type from the container correctly.
+
+One thing to watch out for: if tile_shapes is a std::set instead of a std::vector, the .reserve() call would fail since sets don't support it. For most cases this should be fine, but I might want to drop that optimization to be safe. or make it conditional. Let me just omit reserve for simplicity — it's an optimization, not correctness.
+
+Actually, reserve is a std::vector method. Since _r is a std::vector<_T> (for list comprehensions), calling _r.reserve() is fine. The iterable being reserved is tile_shapes.size() — this calls .size() on the iterable, which works for both std::vector, std::map, std::set, etc. So .reserve(_iterable.size()) is fine as long as the iterable has .size(). Most STL containers do. For safety, I'll keep it.
+
+OK actually, wait. There's another issue with range-based: _r.reserve(tile_shapes.size()) is called on the result vector. But the result might be smaller due to filtering. That's OK — reserve just pre-allocates memory, it doesn't limit size.
+
+For range-based loops, I can't pre-reserve since I don't know how many elements will pass the filter. For dictionary key iteration, container.size() gives the number of keys, so the reserve is accurate without filtering or an over-estimate with filtering, both of which are fine.
+
+Now I'm thinking through what happens when set(local_db.keys()) is called. The visitor sees func_name == "set", sets uses_frozenset = True, and processes the arguments.
+
+When visiting local_db.keys(), it triggers the attribute call handler which returns the IIFE string. Then set() wraps it with set_t(iife_result.begin(), iife_result.end()). But this calls the IIFE twice, which is wrong. I need special-case handling in visit_Call to detect when set() is called with .keys() or .values() as the argument and generate the set directly without the intermediate vector.
+
+Adding special case handling... For general use, std::set<K_type> would be ideal, but since set_t is already defined as std::set<int>, it only works with integer keys. Given that the main use case is set(local_db.keys()) where keys are integers anyway, this limitation is acceptable.
+
+I'm refining the approach by separating two concerns: one flag to trigger both the <set> header and the set_t alias for frozenset and parameterless set operations, and another flag to include just the header without the alias for cases like set(d.keys()) where I'll emit std::set<decltype(...)> directly instead of using the alias.
+
+Updating the design... I see the issue with the string formatting getting tangled up. Let me refactor this to be clearer by handling the keys and values cases separately, with explicit variable names in the loop so I'm not doing any conditional logic inside the f-string.
+
+Now I need to make sure the uses_set_header flag actually propagates up to the code generation phase so the <set> include gets added when needed. The cleanest approach is to just combine the check when deciding whether to include the header—if either uses_frozenset or uses_set_header is true, I should add the include. I'm realizing the simplest solution is to just set uses_frozenset = True whenever any set operation appears, which ensures both the header and type alias get emitted without needing to track a separate flag through the call stack. For comprehensions I'll still use std::set<decltype(...)> for type safety, but the alias being present doesn't hurt anything. I need to track uses_ranges_header through the return chain alongside uses_frozenset, so I'll extend the tuple to include it: (cpp_body, used_prims, uses_frozenset, uses_ranges_header). This keeps the propagation simple without overcomplicating things with a dataclass.
+
+Now I'm mapping out the implementation order: first the C++ standard enum, then updating the main module, followed by the visitor with its new tracking fields, then the core transpiler with smaller adjustments, and finally tests and documentation. For the visitor's __init__, I need to add the cpp_std parameter, initialize the dict type environment, and set up the header tracking flags for both set comprehensions and C++20 ranges.
+
+I'm adding several helper methods to handle annotation parsing and comprehension generation, plus modifying key visit methods to track dictionary types and handle special cases like set(d.keys()) and the .keys()/.values() attribute calls.
+
+Now I need to implement the three comprehension visitor methods and update the typing imports to include Optional and Tuple, then import CppStandard from the same package. Let me start writing the implementation.
+
+One thing to consider: the iterable in a comprehension could theoretically reference the iteration variable itself, but that's extremely rare in practice, so I'll skip handling that edge case. For set comprehensions, I'll use std::set<_T> directly and track this separately with a uses_set_header flag to avoid redundant <set> includes when set_t is already being added.
+
+Actually, I'm going to simplify this—I'll just merge uses_set_header into uses_frozenset. Even if the set_t alias ends up unused, it's harmless and avoids extra complexity. Any use of <set> will set uses_frozenset = True, ensuring both the include and alias get emitted. Now I need to add a uses_ranges_header flag for the ranges library...
+
+Now I'm sketching out the test cases I need to cover: dict keys and values in expression context for both C++17 and C++20, plus tests for annotated dict types to ensure the correct element type is extracted.
+
+For comprehensions, I need to handle list comprehensions over ranges with and without conditions, generic collections, transformations, and dict items.
+
+Adding more comprehension tests...
+
+I'm noticing a potential issue with how the _make_comprehension_iife function handles the _expr_fn pattern, so I should reconsider that approach before diving into the implementation. I'm realizing there's a critical issue with how I'm handling dictionary iteration — in Python, iterating over a dict gives you the keys, but in C++ a range-based for loop over a std::map yields std::pair<K, V> elements, not just the keys. I need to account for this type mismatch when translating the comprehension.
+
+The real problem is that without explicit type information, I can't reliably determine whether positions is a dict or a sequence, so I have to make a conservative assumption that it's a vector-like container. This is a fundamental limitation I should document, though in most practical cases like tile_shapes, the iteration variable is likely over a list anyway. Writing comprehension code... Writing the comprehension macros... I'm going to organize this into separate messages to keep things manageable and avoid hitting output limits again—starting with the new C++ standard module and updating the initialization files, then moving through the visitor methods, core transpiler updates, and finally tests and documentation.
+

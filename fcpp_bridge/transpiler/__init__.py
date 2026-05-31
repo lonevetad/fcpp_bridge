@@ -5,6 +5,7 @@ from .cpp_code_builder import CppCodeBuilder
 from .python_ast_visitor import PythonAstVisitor
 from .transpiler_core import Transpiler
 from ._constants import _FCPP_PRIMITIVES
+from ._cpp_standard import CppStandard
 
 __all__ = [
     "TranspilationError",
@@ -12,4 +13,5 @@ __all__ = [
     "PythonAstVisitor",
     "Transpiler",
     "_FCPP_PRIMITIVES",
+    "CppStandard",
 ]

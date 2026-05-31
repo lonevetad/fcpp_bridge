@@ -91,3 +91,27 @@ See memory entry [[project-fcpp-export-list-rule]] for details.
 - `old(e)` → temporal lift: value of `e` from the previous round
 - `spawn(key, fn)` → distributed sub-program scoped to a device subset
 - Composition yields self-healing distributed algorithms without explicit message passing
+
+## spawn — deep-dive reference
+
+Full explanation: `fcpp_bridge/explanations/SPAWN_explanation.md`
+
+Sections covered:
+1. **Signature** — C++ and Python DSL; status constants (`SPAWN_STATUS_BORDER/INTERNAL/TERMINATED`)
+2. **What keys are** — process isolation via trace-slot hashing; each `(call_point, key)` pair is an independent history
+3. **Round execution step-by-step** — key union, process body, status dispatch, neighbour export
+4. **Three status flavours** — `bool` (all-or-nothing), `field<bool>` (per-neighbour), `status` (full enum)
+5. **Concrete mental model** — wave propagation; `internal` spreads, `terminated` stops
+6. **FUN_EXPORT** — `spawn_t<K,B>` + inner body exports
+7. **Keys in depth** — required interface (`operator==`, `std::hash`, `serialize`); `common::option<K>` injection; Style 1 `device_t`, Style 2 custom struct, Style 3 `fcpp::tuple`
+8. **Returned map semantics** — `bool`/`field<bool>`: ALL processed keys in map; `status`: only `*_output` keys. Who sees results. Four use patterns. Safe discard.
+9. **UDP-like request-reply** — key immutability; Option A two spawns (data in reply key, snapshot); Option B single spawn (data via `nbr`, live); comparison table
+
+### Critical spawn facts
+
+- Key is **immutable** for the entire process instance lifetime; evolving state → `old`/`nbr` inside the body or a second spawn
+- `message_dispatch.hpp` is **one-way delivery** (fire-and-forget), NOT request-reply
+- For request-reply: **two spawns preferred** — reply key carries snapshot data, body stays trivial; single spawn possible but nested exports are non-trivial
+- `bool` status → **ALL** processed keys in returned map; `status` → only `*_output` keys
+- Result appears on the node that returned `*_output`, not necessarily the injecting node
+- Discarding the return value (no capture) is safe — `unordered_map` destructor, no heap leak

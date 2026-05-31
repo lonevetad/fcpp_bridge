@@ -247,6 +247,12 @@ def test_transpiler_generate_returns_string():
     assert isinstance(Transpiler(FloatAgg2).generate(), str)
 
 
+COMM_VALUE = 150
+PI_RATIO = 3.14
+USE_FLAG = True
+STRING_LABEL = "test_const"
+
+
 def test_transpiler_state_type_int():
     @aggregate_function
     class IntAgg2:
@@ -257,6 +263,22 @@ def test_transpiler_state_type_int():
             return self_state
 
     assert Transpiler(IntAgg2).get_state_type_cpp().name == "int"
+
+
+def test_transpiler_module_constants_are_exported():
+    @aggregate_function
+    class ConstAggregate:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            return COMM_VALUE + int(PI_RATIO)
+
+    cpp_code = Transpiler(ConstAggregate).generate()
+    assert "constexpr int COMM_VALUE = 150;" in cpp_code
+    assert "constexpr double PI_RATIO = 3.14;" in cpp_code
+    assert "constexpr bool USE_FLAG = true;" in cpp_code
+    assert "constexpr const char STRING_LABEL[] = \"test_const\";" in cpp_code
 
 
 def test_transpiler_state_type_bool():
@@ -317,3 +339,315 @@ def test_transpiler_adds_geometry_header_for_rectangle_walk():
 
     cpp = Transpiler(WalkAgg).generate()
     assert "<lib/coordination/geometry.hpp>" in cpp
+
+
+# ============================================================================
+# Phase 3: set_t alias emission when frozenset() is used
+# ============================================================================
+
+
+def test_transpiler_frozenset_emits_set_t_alias():
+    @aggregate_function
+    class FrozenSetAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            s = frozenset({self_uid()})  # noqa: F821
+            return self_state
+
+    cpp = Transpiler(FrozenSetAgg).generate()
+    assert "using set_t = std::set<int>;" in cpp
+    assert "<set>" in cpp
+
+
+def test_transpiler_frozenset_empty_emits_set_t_alias():
+    @aggregate_function
+    class EmptyFrozenSetAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            s = frozenset()  # noqa: F821
+            return self_state
+
+    cpp = Transpiler(EmptyFrozenSetAgg).generate()
+    assert "using set_t = std::set<int>;" in cpp
+
+
+def test_transpiler_no_set_t_alias_without_frozenset():
+    @aggregate_function
+    class NoFrozenSetAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            return self_state
+
+    cpp = Transpiler(NoFrozenSetAgg).generate()
+    assert "set_t" not in cpp
+
+
+def test_transpiler_uses_frozenset_flag_tracked_by_visitor():
+    import ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor()
+    v.visit(ast.parse("frozenset()").body[0].value)
+    assert v.uses_frozenset is True
+
+
+def test_transpiler_uses_frozenset_flag_false_without_frozenset():
+    import ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor()
+    v.visit(ast.parse("nbr(x)").body[0].value)
+    assert v.uses_frozenset is False
+
+
+# ============================================================================
+# Phase 8: CppStandard — Transpiler integration
+# ============================================================================
+
+
+def test_transpiler_accepts_cpp14():
+    from fcpp_bridge.transpiler import CppStandard
+
+    @aggregate_function
+    class Cpp14Agg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            return self_state
+
+    t = Transpiler(Cpp14Agg, cpp_std=CppStandard.CPP14)
+    assert t.cpp_std == CppStandard.CPP14
+    cpp = t.generate()
+    assert isinstance(cpp, str) and len(cpp) > 0
+
+
+def test_transpiler_accepts_cpp26():
+    from fcpp_bridge.transpiler import CppStandard
+
+    @aggregate_function
+    class Cpp26Agg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            return self_state
+
+    t = Transpiler(Cpp26Agg, cpp_std=CppStandard.CPP26)
+    assert t.cpp_std == CppStandard.CPP26
+
+
+def test_transpiler_default_cpp_standard_is_cpp17():
+    from fcpp_bridge.transpiler import CppStandard
+
+    @aggregate_function
+    class StdAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            return self_state
+
+    t = Transpiler(StdAgg)
+    assert t.cpp_std == CppStandard.CPP17
+
+
+def test_transpiler_accepts_cpp20():
+    from fcpp_bridge.transpiler import CppStandard
+
+    @aggregate_function
+    class Cpp20Agg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            return self_state
+
+    t = Transpiler(Cpp20Agg, cpp_std=CppStandard.CPP20)
+    assert t.cpp_std == CppStandard.CPP20
+
+
+def test_transpiler_cpp20_dict_keys_emits_ranges_include():
+    """With C++20, d.keys() in compute body triggers #include <ranges>."""
+    from fcpp_bridge.transpiler import CppStandard
+
+    @aggregate_function
+    class RangesAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            ks = local_db.keys()  # noqa: F821
+            return self_state
+
+    cpp = Transpiler(RangesAgg, cpp_std=CppStandard.CPP20).generate()
+    assert "<ranges>" in cpp
+    assert "std::views::keys" in cpp
+
+
+def test_transpiler_cpp17_dict_keys_emits_iife():
+    """With C++17 (default), d.keys() emits an IIFE, not std::views."""
+
+    @aggregate_function
+    class IifeAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            ks = local_db.keys()  # noqa: F821
+            return self_state
+
+    cpp = Transpiler(IifeAgg).generate()
+    assert "std::views::keys" not in cpp
+    assert "[&]()" in cpp
+    assert "push_back(_k)" in cpp
+
+
+def test_transpiler_list_comp_in_compute():
+    """List comprehension in compute() body is transpiled to vector IIFE."""
+
+    @aggregate_function
+    class ListCompAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            xs = [i for i in range(10)]  # noqa: F821
+            return self_state
+
+    cpp = Transpiler(ListCompAgg).generate()
+    assert "std::vector<int>" in cpp
+    assert "push_back(i)" in cpp
+
+
+def test_transpiler_set_comp_in_compute():
+    """Set comprehension in compute() body triggers <set> include."""
+
+    @aggregate_function
+    class SetCompAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            s = {i for i in range(5)}  # noqa: F821
+            return self_state
+
+    cpp = Transpiler(SetCompAgg).generate()
+    assert "#include <set>" in cpp
+    assert "std::set<int>" in cpp
+    assert "_r.insert(i)" in cpp
+
+
+def test_transpiler_dict_comp_in_compute():
+    """Dict comprehension in compute() body emits std::map IIFE."""
+
+    @aggregate_function
+    class DictCompAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            d = {i: i * 2 for i in range(5)}  # noqa: F821
+            return self_state
+
+    cpp = Transpiler(DictCompAgg).generate()
+    assert "std::map<_K, _V>" in cpp
+    assert "_r[i] = (i * 2)" in cpp
+
+
+# ============================================================================
+# Phase 9: config file integration
+# ============================================================================
+
+
+def test_transpiler_config_yaml_sets_cpp_std(monkeypatch, tmp_path):
+    """Transpiler reads cpp_standard from top-level YAML key when not given explicitly."""
+    (tmp_path / "fcpp_bridge.yaml").write_text(
+        "cpp_standard: cpp14\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    from fcpp_bridge.transpiler import CppStandard
+
+    @aggregate_function
+    class CfgYamlAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            return self_state
+
+    t = Transpiler(CfgYamlAgg)
+    assert t.cpp_std == CppStandard.CPP14
+
+
+def test_transpiler_config_json_sets_cpp_std(monkeypatch, tmp_path):
+    """Transpiler falls back to JSON config when no YAML file is present."""
+    import json
+    (tmp_path / "fcpp_bridge.json").write_text(
+        json.dumps({"cpp_standard": "cpp20"}), encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    from fcpp_bridge.transpiler import CppStandard
+
+    @aggregate_function
+    class CfgJsonAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            return self_state
+
+    t = Transpiler(CfgJsonAgg)
+    assert t.cpp_std == CppStandard.CPP20
+
+
+def test_transpiler_explicit_arg_overrides_config(monkeypatch, tmp_path):
+    """An explicit cpp_std argument takes precedence over the config file."""
+    (tmp_path / "fcpp_bridge.yaml").write_text(
+        "cpp_standard: cpp14\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    from fcpp_bridge.transpiler import CppStandard
+
+    @aggregate_function
+    class ExplicitAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            return self_state
+
+    t = Transpiler(ExplicitAgg, cpp_std=CppStandard.CPP26)
+    assert t.cpp_std == CppStandard.CPP26
+
+
+def test_transpiler_yaml_beats_json_for_std(monkeypatch, tmp_path):
+    """When both YAML and JSON config exist, YAML wins."""
+    import json as _json
+    (tmp_path / "fcpp_bridge.yaml").write_text(
+        "cpp_standard: cpp14\n", encoding="utf-8"
+    )
+    (tmp_path / "fcpp_bridge.json").write_text(
+        _json.dumps({"cpp_standard": "cpp26"}), encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    from fcpp_bridge.transpiler import CppStandard
+
+    @aggregate_function
+    class YamlWinsAgg:
+        def initial_state(self) -> int:
+            return 0
+
+        def compute(self, self_state: int, neighbors: Neighborhood[int]) -> int:
+            return self_state
+
+    t = Transpiler(YamlWinsAgg)
+    assert t.cpp_std == CppStandard.CPP14
