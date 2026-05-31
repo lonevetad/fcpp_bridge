@@ -10,3 +10,4 @@
 - [text_dashboard.py print→logging skipped](feedback_text_dashboard_untouched.md) — skipped for print→logging pass only; other refactorings are fair game
 - [C++ modern standards reference](reference_cpp_modern.md) — C++14 focus; lambdas, RAII, smart ptrs, templates; skill: `/cpp-modern`
 - [FCPP library reference](reference_fcpp_library.md) — all primitives, CALL macro, export_list, Python DSL rules; skill: `/fcpp-library`
+- [spawn deep-dive](../../explanations/SPAWN_explanation.md) — keys, status types, returned map semantics, UDP-like request-reply (two-spawn vs single-spawn)

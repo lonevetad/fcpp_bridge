@@ -1,5 +1,6 @@
 # Memory Index
 
+- [spawn deep-dive](../explanations/SPAWN_explanation.md) — keys, status types, returned map semantics, UDP-like request-reply (two-spawn vs single-spawn)
 - [FCPP exercises project state](project_fcpp_exercises.md) — build system, file layout, run command, CMakeLists foreach pattern
 - [FCPP export_list rule](project_fcpp_export_list_rule.md) — must add foo_t to main_t's export_list when foo uses nbr(); common compile error pattern
 - [fcpp_bridge project state](project_fcpp_bridge.md) — 675 tests; standalone repo at ../fcpp_bridge/ (flat layout); FCPP_INCLUDE_PATH env var; compiler path bug fixed
