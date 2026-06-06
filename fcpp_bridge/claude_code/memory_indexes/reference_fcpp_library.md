@@ -1,7 +1,7 @@
 ---
 name: reference-fcpp-library
 description: "FCPP C++14 aggregate programming library — all primitives, CALL macro, state/export_list, Python DSL rules, project layout; skill at <project>/.claude/commands/fcpp-library.md"
-metadata: 
+metadata:
   node_type: memory
   type: reference
   originSessionId: 30462d41-0a8b-4ed3-9933-02f384ad3e82
@@ -12,9 +12,11 @@ the same program, shares values with 1-hop neighbours each round, and distribute
 algorithms emerge from these local interactions.
 
 ## Primary skill file
+
 `<project>/.claude/commands/fcpp-library.md` — invoke with `/fcpp-library` for full reference.
 
 ## FCPP headers
+
 ```cpp
 #include <fcpp/fcpp.hpp>                   // umbrella header
 #include <lib/coordination/basics.hpp>     // nbr, old, spawn, count_hood
@@ -25,45 +27,52 @@ algorithms emerge from these local interactions.
 ```
 
 ## CALL macro pattern (critical)
+
 Every FCPP aggregate primitive must be called in the **same order** at every node every round.
+
 - `FUN void MAIN(ARGS) { CODE ... }` — aggregate function boilerplate
 - `bis_distance(CALL, ...)` — CALL expands to `node, trace_t{trace, ++call_point}`
 - `self_uid()` → `node.uid` — **not a CALL-counter primitive**; safe inside switch/if
 - **Never** call any primitive inside a conditional; all primitives unconditional, branching after
 
 ## All primitives (Python DSL → C++)
-| Python DSL                                    | C++                                           | Header       |
-|-----------------------------------------------|-----------------------------------------------|--------------|
-| `nbr(value)`                                  | `nbr(CALL, value)` → field<T>                | basics.hpp   |
-| `old(init, lambda)`                           | `old(CALL, init, fn)` → T                    | basics.hpp   |
-| `count_hood()`                                | `count_hood(CALL)` → int                     | basics.hpp   |
-| `spawn(lambda, key)`                          | `spawn(CALL, fn, key)` → map<K,V>            | basics.hpp   |
-| `min_hood(field)`                             | `min_hood(CALL, field)` → T                  | utils.hpp    |
-| `max_hood(field)`                             | `max_hood(CALL, field)` → T                  | utils.hpp    |
-| `fold_hood(fn, field, init)`                  | `fold_hood(CALL, fn, field, init)` → T       | utils.hpp    |
-| `bis_distance(is_src, speed, comm)`           | `bis_distance(CALL, is_src, spd, com)` → dbl | spreading.hpp|
-| `abf_distance(is_src)`                        | `abf_distance(CALL, is_src)` → double        | spreading.hpp|
-| `broadcast(is_src, value)`                    | `broadcast(CALL, dist, value)` → T           | spreading.hpp|
-| `sp_collection(dist, loc, null, fn)`          | `sp_collection(CALL, d, l, n, fn)` → T      | collection.hpp|
-| `mp_collection(dist, loc, null, acc, div)`    | `mp_collection(CALL, ...)` → T               | collection.hpp|
-| `rectangle_walk(min, max, spd, period)`       | `rectangle_walk(CALL, ...)` → void           | geometry.hpp  |
-| `follow_target(pos, speed)`                   | `follow_target(CALL, pos, spd)` → void       | geometry.hpp  |
-| `self_uid()`                                  | `node.uid` → device_t  (no CALL)             | —             |
+
+| Python DSL                                 | C++                                          | Header         |
+| ------------------------------------------ | -------------------------------------------- | -------------- |
+| `nbr(value)`                               | `nbr(CALL, value)` → field<T>                | basics.hpp     |
+| `old(init, lambda)`                        | `old(CALL, init, fn)` → T                    | basics.hpp     |
+| `count_hood()`                             | `count_hood(CALL)` → int                     | basics.hpp     |
+| `spawn(lambda, key)`                       | `spawn(CALL, fn, key)` → map<K,V>            | basics.hpp     |
+| `min_hood(field)`                          | `min_hood(CALL, field)` → T                  | utils.hpp      |
+| `max_hood(field)`                          | `max_hood(CALL, field)` → T                  | utils.hpp      |
+| `fold_hood(fn, field, init)`               | `fold_hood(CALL, fn, field, init)` → T       | utils.hpp      |
+| `bis_distance(is_src, speed, comm)`        | `bis_distance(CALL, is_src, spd, com)` → dbl | spreading.hpp  |
+| `abf_distance(is_src)`                     | `abf_distance(CALL, is_src)` → double        | spreading.hpp  |
+| `broadcast(is_src, value)`                 | `broadcast(CALL, dist, value)` → T           | spreading.hpp  |
+| `sp_collection(dist, loc, null, fn)`       | `sp_collection(CALL, d, l, n, fn)` → T       | collection.hpp |
+| `mp_collection(dist, loc, null, acc, div)` | `mp_collection(CALL, ...)` → T               | collection.hpp |
+| `rectangle_walk(min, max, spd, period)`    | `rectangle_walk(CALL, ...)` → void           | geometry.hpp   |
+| `follow_target(pos, speed)`                | `follow_target(CALL, pos, spd)` → void       | geometry.hpp   |
+| `self_uid()`                               | `node.uid` → device_t (no CALL)              | —              |
 
 ## Spawn status codes (must match fcpp::status enum exactly)
+
 ```python
 SPAWN_STATUS_BORDER     = 0   # fcpp::status::border — off routing path
 SPAWN_STATUS_INTERNAL   = 1   # fcpp::status::internal — actively routing
 SPAWN_STATUS_TERMINATED = 2   # fcpp::status::terminated_output — answer at destination
 ```
+
 Import from: `fcpp_bridge.examples._example_utils`
 
 ## export_list rule (C++ compile error prevention)
+
 If `nbr(CALL, X)` is called and `X`'s type is not in `main_t`'s `export_list`, the C++
 binary won't compile. Fix: add the type to `export_list` in CMakeLists.  
 See memory entry [[project-fcpp-export-list-rule]] for details.
 
 ## Python DSL rules (fcpp_bridge transpiler constraints)
+
 1. **No `from __future__ import annotations`** — turns all annotations to strings; transpiler fails
 2. **No `Tuple[float, ...]`** — Ellipsis in tuple args not handled; use `Tuple[float, float]`
 3. **No `Any`** — no C++ mapping; use concrete types
@@ -72,21 +81,24 @@ See memory entry [[project-fcpp-export-list-rule]] for details.
 6. `old(0, lambda prev: prev+1)` — two-arg form is preferred over one-arg
 
 ## fcpp_bridge key files
+
 - `python_dsl/` — `@aggregate_function`, `Neighborhood`, primitive stubs
 - `transpiler/transpiler_core.py` — Python AST → C++ source
 - `python_dsl/types/aggregate_type.py` — Python type → C++ type inference
 - `compiler/` — CMake/g++ invocation, SHA-256 cache
 - `ipc/swarm_process.py` — launch binary, JSON IPC
 - `examples/abstract_example.py` — Template Method base class
-- `examples/_example_utils.py` — SPAWN_STATUS_*, neighbors_of, build_positions
+- `examples/_example_utils.py` — SPAWN*STATUS*\*, neighbors_of, build_positions
 
 ## Exercises (FE-9/10/11) — implemented 2026-05-29
+
 - `examples/ex_utils/tiles.py` — Sutherland-Hodgman tile grid + clipping
 - `examples/scattered_database.py` — FE-9: distributed shard query via spawn
 - `examples/area_discovery.py` — FE-10: nbr+fold_hood tile-centre sharing
 - `examples/iteratively_area_discovery.py` — FE-11: 4-state machine, 2 scatter_databases, election
 
 ## Field Calculus primitives (theory)
+
 - `nbr(e)` → neighbouring field: each device sees `e` from its 1-hop neighbours
 - `old(e)` → temporal lift: value of `e` from the previous round
 - `spawn(key, fn)` → distributed sub-program scoped to a device subset
@@ -94,24 +106,17 @@ See memory entry [[project-fcpp-export-list-rule]] for details.
 
 ## spawn — deep-dive reference
 
-Full explanation: `fcpp_bridge/explanations/SPAWN_explanation.md`
+Full documentation: `fcpp_bridge/explanations/SPAWN_explanation.md`
+Sections: Quick Reference · §1 Keys · §2 Round/Propagation/Termination · §3 Returned Map · §4 Protocols · §5 FUN_EXPORT
 
-Sections covered:
-1. **Signature** — C++ and Python DSL; status constants (`SPAWN_STATUS_BORDER/INTERNAL/TERMINATED`)
-2. **What keys are** — process isolation via trace-slot hashing; each `(call_point, key)` pair is an independent history
-3. **Round execution step-by-step** — key union, process body, status dispatch, neighbour export
-4. **Three status flavours** — `bool` (all-or-nothing), `field<bool>` (per-neighbour), `status` (full enum)
-5. **Concrete mental model** — wave propagation; `internal` spreads, `terminated` stops
-6. **FUN_EXPORT** — `spawn_t<K,B>` + inner body exports
-7. **Keys in depth** — required interface (`operator==`, `std::hash`, `serialize`); `common::option<K>` injection; Style 1 `device_t`, Style 2 custom struct, Style 3 `fcpp::tuple`
-8. **Returned map semantics** — `bool`/`field<bool>`: ALL processed keys in map; `status`: only `*_output` keys. Who sees results. Four use patterns. Safe discard.
-9. **UDP-like request-reply** — key immutability; Option A two spawns (data in reply key, snapshot); Option B single spawn (data via `nbr`, live); comparison table
+### Critical facts
 
-### Critical spawn facts
-
-- Key is **immutable** for the entire process instance lifetime; evolving state → `old`/`nbr` inside the body or a second spawn
-- `message_dispatch.hpp` is **one-way delivery** (fire-and-forget), NOT request-reply
-- For request-reply: **two spawns preferred** — reply key carries snapshot data, body stays trivial; single spawn possible but nested exports are non-trivial
+- Key is **immutable** for the process lifetime; evolving state → `old`/`nbr` inside body or a second spawn
 - `bool` status → **ALL** processed keys in returned map; `status` → only `*_output` keys
+- Result appears on the node that returned `*_output`, not the injector
+- Termination is a **wave** (1 hop/round from T to I); border nodes stop naturally, not via the wave; quiescence ≈ `distance(T,I)` extra rounds
+- Re-injection (keeping K in `key_set` every round) blocks quiescence — use `common::option<K>` + `old`
+- `message_dispatch.hpp` is **one-way** (fire-and-forget), NOT request-reply
+- For request-reply: two spawns preferred (reply key carries snapshot); single spawn works but needs nested exports
 - Result appears on the node that returned `*_output`, not necessarily the injecting node
-- Discarding the return value (no capture) is safe — `unordered_map` destructor, no heap leak
+- Discarding the return value is safe — `unordered_map` destructor, no heap leak
