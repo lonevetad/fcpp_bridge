@@ -1,6 +1,8 @@
 #ifndef SHARED_EXERCISES__
 #define SHARED_EXERCISES__
 
+#include <map>
+
 //! Importing the FCPP library.
 #include "lib/fcpp.hpp"
 
@@ -37,6 +39,58 @@ namespace fcpp {
     }
     FUN_EXPORT for_each_nbr_t = export_list<device_t, common::unit>; // even F?
 
+
+
+
+    // Builds a field<V> from a map whose keys are device UIDs.
+    // `default_val` is used for every device NOT present in the map.
+    template <typename V>
+    field<V> map_keys_to_field(V default_val, std::map<device_t, V> const& m) {
+        std::vector<device_t> ids;
+        std::vector<V> vals;
+        ids.reserve(m.size());
+        vals.reserve(m.size() + 1);
+        vals.push_back(default_val);           // index 0: default
+#if __cplusplus <= 201402L
+        // C++14 and older
+        for (auto const& kv : m) {       // std::map iterates in key order
+            device_t uid = kv.first;
+            V v = kv.second;
+#else
+        // C++17 and earlier
+        for (auto const& [uid, v] : m) {       // std::map iterates in key order
+#endif
+            ids.push_back(uid);
+            vals.push_back(v);
+        }
+        return details::make_field(std::move(ids), std::move(vals));
+    }
+
+    // Builds a field<V> from a map whose keys are somethings that
+    // might be converted into a device UIDs through a provided function
+    // (which might just be a getter or a tuple-extractor).
+    // `default_val` is used for every device NOT present in the map.
+    template <typename V, typename K, typename KE, typename = common::if_signature<KE, device_t(K)>>
+    field<V> map_keys_to_field(V default_val, std::map<K, V> const& m, KE&& uid_extractor) {
+        std::vector<device_t> ids;
+        std::vector<V> vals;
+        ids.reserve(m.size());
+        vals.reserve(m.size() + 1);
+        vals.push_back(default_val);           // index 0: default
+#if __cplusplus <= 201402L
+        // C++14 and older
+        for (auto const& kv : m) {       // std::map iterates in key order
+            K k = kv.first;
+            V v = kv.second;
+#else
+        // C++17 and earlier
+        for (auto const& [k, v] : m) {       // std::map iterates in key order
+#endif
+            ids.push_back(uid_extractor(k));
+            vals.push_back(v);
+        }
+        return details::make_field(std::move(ids), std::move(vals));
+    }
 }
 
 #endif

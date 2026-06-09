@@ -329,6 +329,27 @@ The wave contracts naturally; process fades out hop by hop over ~diameter rounds
 
 `spawn` returns `std::unordered_map<K, R, common::hash<K>>`.
 
+### Map type layout — common mistake
+
+```cpp
+using result_map = std::unordered_map<K, R, common::hash<K>>;
+//                                    ^KEY  ^VALUE (body return, minus status)
+```
+
+**K** = key-set element type. **R** = body return value (first element of `tuple<R, B>`).
+
+> **Pitfall:** inverting K and R in the type alias is the most common beginner mistake.
+> Compiler error: `conversion from unordered_map<K,R,...> to unordered_map<R,K,...>`.
+
+```cpp
+// Wrong:
+using my_map = std::unordered_map<SpawnReturnType, KeyType, common::hash<SpawnReturnType>>;
+// Correct:
+using my_map = std::unordered_map<KeyType, SpawnReturnType, common::hash<KeyType>>;
+```
+
+---
+
 ### What ends up in the map — critical difference by status type
 
 | Status type `B` | Keys in the returned map |
@@ -474,3 +495,151 @@ using my_spawn_t = export_list<spawn_t<K, B>, /* exports of process body */>;
 ```
 
 `spawn_t<K, B>` covers the key-propagation bookkeeping; you still need to add the export types of whatever `process` does internally (its own `old`/`nbr` calls).
+
+---
+
+## 6. Spawning Multiple Independent Parallel Processes
+
+### The desynchronization trap — spawn inside a loop
+
+A fundamental FCPP invariant: **every aggregate primitive must be called the same
+number of times, in the same order, on every node every round.** The CALL call-point
+counter is used to match `old`/`nbr` history between nodes; diverging call sequences
+produce silently wrong results or runtime crashes.
+
+Calling `spawn` inside a loop over runtime data breaks this invariant:
+
+```cpp
+// WRONG — breaks CALL trace synchronization
+for (auto const& kv : per_node_data) {
+    spawn(CALL, body, make_key(kv));  // called 0× on some nodes, N× on others
+}
+```
+
+- A node with 0 entries loops 0 times → 0 spawn calls.
+- A node with 3 entries loops 3 times → 3 spawn calls.
+- The CALL counter diverges across nodes → processes on different nodes no longer
+  correspond to each other → silent mismatch, wrong state, or assertion failures.
+
+### The fix — collect keys first, then call spawn once
+
+`spawn`'s third argument (`key_set`) is **any iterable range** whose element type is `K`
+— not only `common::option<K>`. Pass a `std::vector<K>` containing all keys to inject;
+FCPP starts one independent process per element in a single call:
+
+```cpp
+// Phase A: pure logic, no FCPP primitives
+std::vector<K> keys_to_inject;
+for (auto const& kv : per_node_data) {
+    if (should_start_process(kv))
+        keys_to_inject.push_back(build_key(kv));
+}
+
+// Phase B: single spawn call — every node reaches this exactly once per round
+auto results = spawn(CALL, [&](K const& k) {
+    // ... routing logic — abf_distance, sp_collection, etc. are fine here ...
+    return make_tuple(value, s);
+}, keys_to_inject);
+
+// Phase C: consume — pure logic, no FCPP primitives
+for (auto const& [k, v] : results) {
+    // ... handle received results
+}
+```
+
+Nodes with nothing to inject pass an empty `keys_to_inject` — they still call spawn
+and stay synchronized. Each element in `keys_to_inject` starts its own fully independent
+process.
+
+### Why each element becomes an independent process
+
+Inside `spawn`, FCPP pushes a distinct hash of each key onto the trace stack before
+running the process body:
+
+```cpp
+internal::trace_key trace_process(node.stack_trace, common::hash_to<trace_t>(k));
+```
+
+Every key gets its own trace slot → completely isolated `old`/`nbr` history →
+separate propagation wave → separate termination. There is no interaction between
+processes keyed by different values. From the network's perspective they are fully
+parallel, independent sub-computations.
+
+### Container type choices
+
+| Container | Notes |
+|-----------|-------|
+| `common::option<K>` | 0 or 1 key; the standard idiom for single-process injection |
+| `std::vector<K>` | Simplest multi-key container; no extra operators required on `K` |
+| `std::set<K>` | De-duplicates automatically; requires `operator<` on `K` |
+| `std::unordered_set<K>` | De-duplicates; requires `std::hash<K>` on `K` |
+
+`std::vector<K>` is the pragmatic default when keys are already structurally unique
+(the key struct carries enough fields to distinguish all concurrent processes).
+
+### FUN_EXPORT — no change needed
+
+`spawn_t<K, B>` covers **any number** of simultaneously active processes regardless
+of how many keys were injected in a given round. No additional export entry is needed
+when switching from `common::option<K>` to `std::vector<K>`.
+
+### Real-world example — scattered database response spawn
+
+A data-holder node may receive multiple simultaneous query requests. Each response
+needs its own independent routing wave back to the respective requester. The
+three-phase pattern handles this correctly:
+
+```cpp
+// Phase A — decide which responses to inject (no FCPP primitives)
+std::vector<scattered_db_response> responses_to_inject;
+for (auto const& [k, v] : query_res) {
+    bool has_data = get<1>(v);
+    if (has_data && not_already_answered(k)) {
+        scattered_db_response resp(k.key, get<2>(v), k.requester,
+                                   node.uid, round_tick, node.current_time());
+        node.storage(tags::node_responses_provided{})[...] = resp;
+        responses_to_inject.push_back(resp);
+    }
+}
+
+// Phase B — single spawn: one independent routing wave per response
+spawn_res_response_map response_res = spawn(CALL,
+    [&](scattered_db_response const& resp) {
+        real_t dist = abf_distance(CALL, node.uid == resp.requester);
+        set_nodes_to_source_t path = sp_collection(CALL, dist,
+            set_nodes_to_source_t{node.uid}, set_nodes_to_source_t{},
+            [](set_nodes_to_source_t a, set_nodes_to_source_t b){
+                a.insert(b.begin(), b.end()); return a;
+            });
+        bool on_path = path.count(resp.holder) > 0;
+        status s = (node.uid == resp.requester) ? status::terminated_output
+                 : on_path ? status::internal : status::border;
+        return make_tuple(resp, s);
+    },
+    responses_to_inject   // ← was: common::option<scattered_db_response>
+);
+
+// Phase C — consume results (no FCPP primitives)
+for (auto const& [k_r, v_r] : response_res) {
+    if (node.uid == v_r.requester)
+        node.storage(tags::node_data_got{})[k_r.to_string()] = v_r.data;
+}
+```
+
+Each `scattered_db_response` in `responses_to_inject` becomes a completely
+independent routing wave back to its requester. All waves propagate in parallel,
+terminate independently, and never share state.
+
+### Summary rules
+
+1. **Never call `spawn` inside a loop over runtime data.** The CALL counter must
+   advance identically on every node every round.
+2. **Collect all keys before calling spawn.** The preparation loop (Phase A) does
+   pure data logic; the single spawn call (Phase B) is always reached exactly once.
+3. **An empty injection container is correct and safe.** Nodes with nothing to inject
+   pass an empty vector; they still participate in existing active processes they
+   received from neighbours.
+4. **One key = one independent process.** Multiple keys in the same spawn call start
+   separate processes with isolated state — they do not share `old`/`nbr` history.
+5. **`FUN_EXPORT` does not change.** `spawn_t<K, B>` already covers multiple
+   simultaneous processes.

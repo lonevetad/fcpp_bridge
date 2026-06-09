@@ -107,7 +107,7 @@ See memory entry [[project-fcpp-export-list-rule]] for details.
 ## spawn — deep-dive reference
 
 Full documentation: `fcpp_bridge/explanations/SPAWN_explanation.md`
-Sections: Quick Reference · §1 Keys · §2 Round/Propagation/Termination · §3 Returned Map · §4 Protocols · §5 FUN_EXPORT
+Sections: Quick Reference · §1 Keys · §2 Round/Propagation/Termination · §3 Returned Map · §4 Protocols · §5 FUN_EXPORT · §6 Multiple Parallel Processes
 
 ### Critical facts
 
@@ -118,5 +118,74 @@ Sections: Quick Reference · §1 Keys · §2 Round/Propagation/Termination · §
 - Re-injection (keeping K in `key_set` every round) blocks quiescence — use `common::option<K>` + `old`
 - `message_dispatch.hpp` is **one-way** (fire-and-forget), NOT request-reply
 - For request-reply: two spawns preferred (reply key carries snapshot); single spawn works but needs nested exports
-- Result appears on the node that returned `*_output`, not necessarily the injecting node
 - Discarding the return value is safe — `unordered_map` destructor, no heap leak
+- **Map type layout** — spawn returns `unordered_map<KeyType, ValueType>` (KEY first, VALUE second); inverting them in a `using` alias is the #1 beginner mistake; compiler error: `conversion from map<K,V,...> to map<V,K,...>`
+- **Never call spawn inside a loop** — the CALL counter must advance identically on every node every round; a loop over per-node data desynchronizes the network (see §6)
+
+### Multiple parallel processes — three-phase pattern (§6)
+
+When a node needs to start N independent processes in one round, collect all keys first,
+then call spawn once:
+
+```cpp
+// Phase A: pure logic, no FCPP primitives
+std::vector<K> keys_to_inject;
+for (auto const& entry : per_node_data) {
+    if (should_start(entry))
+        keys_to_inject.push_back(build_key(entry));
+}
+
+// Phase B: single spawn — one process per key, all independent
+auto results = spawn(CALL, [&](K const& k) { ... }, keys_to_inject);
+
+// Phase C: consume results
+for (auto const& [k, v] : results) { ... }
+```
+
+- Empty `keys_to_inject` is correct — node still calls spawn and stays synchronized
+- Each key → isolated `old`/`nbr` history, separate propagation wave, separate termination
+- `FUN_EXPORT` unchanged: `spawn_t<K, B>` covers any number of simultaneous processes
+- Use `std::vector<K>` (simplest, no extra operators needed) or `std::set`/`std::unordered_set<K>` to de-duplicate
+
+## FCPP type and template rules (derived from compiler diagnostics)
+
+### `fcpp::vec<N>` — subscript, not `get<N>`
+`fcpp::vec<N>` is array-like; it does NOT implement the tuple-protocol. Use `v[0]`, `v[1]`.
+`fcpp::get<N>` works only on `fcpp::tuple<...>`, not `fcpp::vec<N>`.
+
+### `sp_collection` / `mp_collection` accumulator constraint
+Both use `if_signature<G, T(T,T)>` = `is_convertible<G, std::function<T(T,T)>>`.
+- Lambda params must be **by value** (or at most `const T&`). Non-const `T&` fails.
+- A generic `[](auto a, auto b)` lambda fails if the body (e.g. `a | b`) doesn't compile for `T`.
+- `std::set` has no `operator|`; set union: `a.insert(b.begin(), b.end()); return a;`
+
+### FCPP node must be non-const
+Every FCPP primitive modifies `node.stack_trace`. Any function using FCPP primitives must
+take `node_t& node` (non-const). `node_t const& node` causes "discards qualifiers" deep
+in FCPP headers.
+
+### `std::result_of` / `std::invoke_result` require argument types
+```cpp
+using V = std::result_of<F>;         // Wrong — incomplete type
+using V = std::invoke_result<F>;     // Wrong — incomplete type
+using V = std::invoke_result_t<F, node_t&>;  // Correct (C++17+)
+using V = decltype(std::declval<F>()(std::declval<node_t&>()));  // Also correct
+```
+
+### Prefer template default `T` + `if_signature` over `auto` + trailing `->`
+
+FCPP coding style for callable-accepting functions — declare `T` as a template default, not via `auto`:
+```cpp
+template <
+    typename node_t,
+    typename G,
+#if __cplusplus <= 201402L
+    typename T = typename std::result_of<G(node_t&)>::type,
+#else
+    typename T = std::invoke_result_t<G, node_t&>,
+#endif
+    typename = common::if_signature<G, T(node_t&)>
+>
+std::map<device_t, T> my_function(node_t& node, G value_fn) { ... }
+```
+`#if` guard goes in template params only; body and return type stay clean.
