@@ -11,6 +11,7 @@
 //! Importing the FCPP library.
 #include "lib/fcpp.hpp"
 #include "run/shared.hpp"
+#include "run/utils.hpp"
 #include "run/storage_init.hpp"
 
 using s_db_key = fcpp::device_t; // the "key" part of the key-value mapping implementing a "scattered database"
@@ -300,6 +301,9 @@ namespace option { // CONSTANTS
     //! @brief Height of the network area (the GUI, actually).
     constexpr int network_height = 500;
 
+    constexpr device_t another_ID_1 = node_num >> 1;
+    constexpr device_t another_ID_2 = node_num >> 2;
+    constexpr device_t another_ID_3 = discrete_sqrt(node_num) << 1;
     
 }
 
@@ -359,12 +363,25 @@ using responses_provided_t = std::unordered_map<provided_responses_k, scattered_
 UTILITY FUNCTIONS
 */
 
+FUN bool has_requested_data(ARGS, s_db_key const key) {
+    return node.storage(tags::node_scattered_db{}).count(key) > 0;
+}
+
+FUN s_db_data get_data(ARGS, s_db_key const key) {
+    return node.storage(tags::node_scattered_db{})[key];
+}
+
+
 /**
 Dummy function to test if current node is enabled to ask for some data, or if its purpose
 will always be the "forwarding node"
 */
 FUN bool is_node_enabled_to_request_data(ARGS){
-    return node.uid == 7; // un nodo a caso ...
+    return (node.uid == 7) // un nodo a caso ...
+        || (node.uid == option::another_ID_1)
+        // || (node.uid == option::another_ID_2)
+        // || (node.uid == option::another_ID_3)
+    ;
 }
 
 /**
@@ -426,10 +443,6 @@ FUN void execute_scattered_db_query(ARGS,
     uint round_tick,
     bool is_enabled_to_request
 ){ CODE
-    //
-    // COMPUTATION OF THE DATA RETRIEVAL
-    //
-
     // Every node uses this gradient for spawn routing.
     // In a production deployment, each requester would build its own gradient,
     real_t dist_from_requester = abf_distance(CALL, is_enabled_to_request);
@@ -457,6 +470,9 @@ FUN void execute_scattered_db_query(ARGS,
     common::option<scattered_db_query> query; // starts by "absent / nullptr-containing". filled if a "spawn-process" needs to spawn
     bool can_fire_request_data = is_there_need_to_request_data(CALL, round_tick);
     s_db_key next_key_request = compute_key_query(CALL, round_tick, can_fire_request_data);
+    can_fire_request_data &= (next_key_request != static_cast<s_db_key>(node.uid)) // can't look for/in myself!
+        // AND do not already have the requested key
+        && ! has_requested_data(CALL, next_key_request);
     if(can_fire_request_data) {
         //const bool allow_multiple_queries = false;
         query.emplace(
@@ -466,13 +482,13 @@ FUN void execute_scattered_db_query(ARGS,
             node.current_time() //
         );
         // later, in the spawn, the "node_data_requested" storage field will be set to "true"
-    }   
+    }
 
     // ... run the spawn
     spawn_res_query_map query_res = spawn(CALL, [&](scattered_db_query const& message_query) {
         s_db_key key = message_query.key;
         bool is_requester = node.uid == message_query.requester;
-        bool has_data = node.storage(tags::node_scattered_db{}).count(key) > 0;
+        bool has_data = has_requested_data(CALL, key);
         if(is_requester){
             node.storage(tags::node_last_requested_data{}) = message_query.to_string(); // message_query;
         }
@@ -491,7 +507,7 @@ FUN void execute_scattered_db_query(ARGS,
             static_cast<spawn_res_query>(make_tuple(
                 message_query,
                 has_data,
-                has_data ? (node.storage(tags::node_scattered_db{})[key]) : static_cast<s_db_data>(node.position())
+                has_data ? get_data(CALL, key) : static_cast<s_db_data>(node.position())
             )),
             s
         );
@@ -601,7 +617,7 @@ FUN void execute_scattered_db_query(ARGS,
         s_db_key request_key    = v_r.key;
         if (node.uid == requester) {
             node.storage(tags::node_data_got{})[k_r.to_string()] = response_data;
-            if (node.storage(tags::node_scattered_db{}).count(request_key) == 0) {
+            if ( has_requested_data(CALL, request_key) ) {
                 node.storage(tags::node_scattered_db{})[request_key] = response_data;
             }
             node.storage(tags::node_data_requested{}) = false;

@@ -14,8 +14,8 @@ fcpp-exercises
 
 # Generated C++ code
 cpp_transpiled/
-*.cpp
-*.hpp
+# *.cpp
+# *.hpp
 
 # Build artifacts
 build/
