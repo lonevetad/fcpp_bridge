@@ -1,8 +1,6 @@
 // Copyright © 2021 Giorgio Audrito. All Rights Reserved.
 
-#ifndef REQUESTER_AMOUNT_
-#define REQUESTER_AMOUNT_ 4
-#endif
+// CREATO A PARTIRE DAL PROGETTO "fcpp-exercises" PER STUDIARE
 
 /**
  * @file exercises.cpp
@@ -19,6 +17,75 @@
 using s_db_key = fcpp::device_t; // the "key" part of the key-value mapping implementing a "scattered database"
 using s_db_data = fcpp::vec<2>;  // the "value" part of the key-value mapping implementing a "scattered database"
 
+/**
+ @param enable Boolean stating whether it should be allow multiple queries or not
+ template<int enable = 2>
+ class scattered_db_query;
+ */
+
+/*
+//! @brief Struct representing a data to be retrieved from a scattered database.
+template<>
+class scattered_db_query<true> {
+  public:
+    //! @brief the database KEY
+    s_db_key key;
+    //! @brief Receiver UID, the device/node who started this query
+    fcpp::device_t requester;
+    //! @brief Creation timestamp, but in "ticks".
+    uint created_at_tick;
+    //! @brief Creation timestamp.
+    fcpp::times_t time;
+    //! @brief counter, tracking how many times the device/node has asked for _some_ data
+    // uint;
+
+    //! @brief Empty constructor.
+    scattered_db_query() = default;
+
+    //! @brief Member constructor.
+    scattered_db_query(
+        s_db_key key,
+        fcpp::device_t requester,
+        uint created_at_tick,
+        fcpp::times_t time
+    ) : key(key), requester(requester), created_at_tick(created_at_tick), time(time) {}
+
+    //! @brief Equality operator.
+    bool operator==(scattered_db_query const& m) const {
+        return key == m.key
+            and requester == m.requester
+            // and ... (allow_multiple_queries or ...)
+            ;
+    }
+
+    //! @brief Hash computation.
+    size_t hash() const {
+        constexpr size_t fields_count = 4;
+        constexpr size_t offs = sizeof(size_t)*CHAR_BIT/fields_count;
+        size_t partial = //
+            ((size_t(requester) << offs))
+            | (size_t(key))
+            // beware of "infinite" stream of messages
+            | ((size_t(time) << (3*offs)))
+            | ((size_t(created_at_tick) << (offs << 1)))
+            ;
+        // removed to avoind "infinite" stream of messages
+        return partial;
+    }
+
+    //! @brief Serialises the content from/to a given input/output stream.
+    template <typename S>
+    S& serialize(S& s) {
+        return s & key & requester & created_at_tick & time;
+    }
+
+    //! @brief Serialises the content from/to a given input/output stream (const overload).
+    template <typename S>
+    S& serialize(S& s) const {
+        return s << key << requester << created_at_tick << time;
+    }
+};
+*/
 
 //! @brief Struct representing a data to be retrieved from a scattered database.
 //template<>
@@ -268,8 +335,6 @@ constexpr size_t communication_range = 100;
 
 constexpr bool ALLOW_MULTIPLE_QUERIES = false;
 
-constexpr real_t TIMEOUT_TOLERANCE = 0.25;  // 25% headroom above diameter estimate
-
 //
 
 using scattered_db_complex_t = std::map<s_db_key, s_db_data>;
@@ -313,15 +378,9 @@ will always be the "forwarding node"
 */
 FUN bool is_node_enabled_to_request_data(ARGS){
     return (node.uid == 7) // un nodo a caso ...
-#if REQUESTER_AMOUNT_ >= 2
         || (node.uid == option::another_ID_1)
-#endif
-#if REQUESTER_AMOUNT_ >= 3
-        || (node.uid == option::another_ID_2)
-#endif
-#if REQUESTER_AMOUNT_ >= 4
-        || (node.uid == option::another_ID_3)
-#endif
+        // || (node.uid == option::another_ID_2)
+        // || (node.uid == option::another_ID_3)
     ;
 }
 
@@ -384,7 +443,7 @@ FUN void execute_scattered_db_query(ARGS,
     uint round_tick,
     bool is_enabled_to_request
 ){ CODE
-    /*
+
     // Every node uses this gradient for spawn routing.
     // In a production deployment, each requester would build its own gradient,
     real_t dist_from_requester = abf_distance(CALL, is_enabled_to_request);
@@ -403,7 +462,6 @@ FUN void execute_scattered_db_query(ARGS,
         // accumulator / aggregator function
         [](set_nodes_to_source_t a, set_nodes_to_source_t b){ a.insert(b.begin(), b.end()); return a; }
     );
-    */
 
     // part 1 - query : REQUESTER -> DATA HOLDER
     
@@ -423,41 +481,19 @@ FUN void execute_scattered_db_query(ARGS,
             node.current_time() //
         );
         // later, in the spawn, the "node_data_requested" storage field will be set to "true"
-    }
-
-    // ── Network diameter estimate (fully aggregate, outside spawns) ────────────────────
-    // gossip_min elects the minimum UID as a globally consistent reference node.
-    // abf_hops gives each node its hop distance from that reference.
-    // gossip_max spreads the maximum hop distance → eccentricity of the reference.
-    // diameter ≤ 2 × eccentricity(any node) (graph theory).
-    // +1 guards against convergence lag on the first few rounds.
-    device_t net_leader   = gossip_min(CALL, node.uid);
-    hops_t   dist_ldr     = abf_hops(CALL, node.uid == net_leader);
-    hops_t   eccentricity = gossip_max(CALL, dist_ldr);
-    hops_t   timeout_hops = static_cast<hops_t>(
-        static_cast<real_t>(2 * eccentricity) * (1.0f + TIMEOUT_TOLERANCE) + 1.0f
-    );
+    }   
 
     // ... run the spawn
     spawn_res_query_map query_res = spawn(CALL, [&](scattered_db_query const& message_query) {
         s_db_key key = message_query.key;
-        bool is_requester = (node.uid == message_query.requester);
+        bool is_requester = node.uid == message_query.requester;
         bool has_data = has_requested_data(CALL, key);
-        if (is_requester)
-            node.storage(tags::node_last_requested_data{}) = message_query.to_string();
-        // ── Flood frontier (unconditional) ────────────────────────────────────────────
-        // abf_hops: hop distance from requester within the active spawn population.
-        // gossip_max: how far the flood has spread (global max of hops_from_req).
-        // When frontier > timeout_hops the whole reachable network has been searched.
-        hops_t hops_from_req  = abf_hops(CALL, is_requester);
-        hops_t flood_frontier = gossip_max(CALL, hops_from_req);
-        bool   timed_out      = (flood_frontier > timeout_hops);
-        // Unified termination: holder found OR data declared absent after timeout
-        bool can_terminate = gossip(CALL, has_data || timed_out,
-                                   [](bool x, bool y){ return x || y; });
-        status s = has_data      ? status::terminated_output
-                 : can_terminate ? status::terminated
-                 :                 status::internal;
+        if(is_requester){
+            node.storage(tags::node_last_requested_data{}) = message_query.to_string(); // message_query;
+        }
+        // bool inpath = nodes_to_source.count(message_query.from) + nodes_to_source.count(m.to) > 0;
+        status s = has_data ? status::terminated_output
+                : status::internal;
         if(!is_requester){
             if(has_data){
                 node.storage(tags::node_size{}) = 25;
@@ -538,29 +574,31 @@ FUN void execute_scattered_db_query(ARGS,
     // Every node reaches this point exactly once per round regardless of query_res size,
     // keeping the CALL trace counter synchronized across the network.
     // Each entry in responses_to_inject starts a separate spawn process.
-    spawn_res_response_map response_res = spawn(CALL, [&](scattered_db_response const& resp) {
-        bool is_requester = (node.uid == resp.requester);
-        bool is_holder    = (node.uid == resp.holder);
-        // Per-spawn tree rooted at holder — avoids Voronoi fragmentation with multiple requesters.
-        // requester in subtree_from_holder ↔ this node is on the holder→requester path.
-        real_t dist_from_holder = bis_distance(CALL, is_holder, 1, communication_range);
-        set_nodes_to_source_t subtree_from_holder = sp_collection(CALL,
-            dist_from_holder,
-            set_nodes_to_source_t{node.uid}, set_nodes_to_source_t{},
-            [](set_nodes_to_source_t a, set_nodes_to_source_t b){
-                a.insert(b.begin(), b.end()); return a;
-            }
+    spawn_res_response_map response_res = spawn(CALL, [&](scattered_db_response const& the_final_response) {
+        device_t requester = the_final_response.requester;
+        bool is_requester = node.uid == requester;
+        /*
+        real_t dist_from_replier = abf_distance(CALL, node.uid == requester);
+        set_nodes_to_source_t nodes_to_replier = sp_collection(CALL,
+            dist_from_replier,
+            set_nodes_to_source_t{node.uid},
+            set_nodes_to_source_t{},
+            [](set_nodes_to_source_t a, set_nodes_to_source_t b){ a.insert(b.begin(), b.end()); return a; }
         );
-        bool inpath = subtree_from_holder.count(resp.requester) > 0;
+        */
+        bool in_path = nodes_to_source.count(the_final_response.holder) // nodes_to_replier
+            +
+            nodes_to_source.count(requester) // nodes_to_replier
+            > 0;
         status s = is_requester ? status::terminated_output
-                 : inpath       ? status::internal : status::border;
+                : status::internal; // in_path ? status::internal : status::border;
         if (is_requester) {
             node.storage(tags::node_data_requested{}) = false;
             node.storage(tags::node_color{}) = color(BLACK);
         } else {
-            node.storage(tags::node_shape{}) = inpath ? shape::sphere : shape::cube;
+            node.storage(tags::node_shape{}) = in_path ? shape::sphere : shape::cube;
         }
-        return make_tuple(resp, s);
+        return make_tuple(the_final_response, s);
     }, responses_to_inject);
 
     // PHASE C — consume responses, pure logic, no FCPP primitives.
@@ -589,13 +627,14 @@ FUN void execute_scattered_db_query(ARGS,
     }
 }
 FUN_EXPORT execute_scattered_db_query_t = export_list<
+    // get_parent_spanning_tree_t,
     compute_key_query_t,
-    device_t,                                         // gossip_min<device_t> outside spawns
-    hops_t,                                           // abf_hops + gossip_max (outside + inside query spawn)
-    bool,                                             // gossip<bool> inside query spawn
+    real_t,
     uint,
-    bis_distance_t,                                   // inside response spawn
-    sp_collection_t<real_t, set_nodes_to_source_t>,  // inside response spawn
+    set_nodes_to_source_t,
+    sp_collection_t<real_t, set_nodes_to_source_t>, 
+    device_t,
+    abf_distance_t,
     spawn_t<scattered_db_query, status>,
     spawn_t<spawn_res_response, status>
 >;

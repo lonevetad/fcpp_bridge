@@ -340,3 +340,439 @@ These rules are not in any FCPP tutorial; they were derived from compiler diagno
 4. **Every function using FCPP primitives must take `node_t&` (non-const)** — FCPP's trace stack is mutable. `const` qualification propagates and breaks all nested primitive calls.
 5. **`std::result_of<F>` / `std::invoke_result<F>` require argument types** — `result_of<F(ArgType)>` / `invoke_result_t<F, ArgType>`. Without them the template specialization is incomplete and causes cascading `static_assert` failures.
 6. **Prefer template default `T` + `if_signature` over `auto` with trailing `->` for callable-accepting functions** — FCPP style: declare `typename T = invoke_result_t<G, ArgType>` and `typename = common::if_signature<G, T(ArgType)>` as template parameters. The explicit return type `std::map<device_t, T>` replaces `auto`. When multi-standard `#if` guards are needed (C++14 vs C++17+), place the single guard inside the template parameter list — the function body and return type remain clean and guard-free.
+
+---
+
+## Ping-pong communication design
+
+The query-response flow in `scattered_database.cpp` is a **use-and-consume (ping-pong)**
+pattern: a requester fires a query process, the process floods the network until it reaches
+the data holder, the holder fires a response back toward the requester, and both processes
+terminate cleanly. No long-lived channels; each query–response pair lives for the minimum
+necessary number of rounds.
+
+---
+
+### `v1` analysis — what apparently works and what is actually broken
+
+`scattered_database_v1.cpp` (with the `&&` syntax fix at line 472 applied) compiles and
+produces visible behaviour in the simulator, but carries structural problems that only
+manifest with multiple concurrent requesters:
+
+**What works:**
+- Query spawn correctly floods the network and returns `terminated_output` at the holder.
+- Response spawn delivers data back to the requester (floods, but terminates there).
+- `gossip` in the current refactored file (`scattered_database.cpp`) correctly propagates
+  the "holder found" signal across all active nodes so non-holders can self-terminate
+  (`status::terminated`) instead of idling as `internal` until message retention expires.
+
+**What is latently broken in v1 (Voronoi fragmentation):**
+
+`abf_distance(CALL, is_enabled_to_request)` with two or more requesters produces a
+Voronoi-partitioned gradient: each node's distance is measured to its *nearest* requester,
+not to a fixed single root. `sp_collection` then builds a separate spanning tree inside
+each Voronoi cell. `nodes_to_source` at any node only contains UIDs from its own cell.
+
+In v1 the response spawn computes `in_path` from `nodes_to_source` but then **ignores it**:
+
+```cpp
+status s = is_requester ? status::terminated_output
+        : status::internal;  // in_path ? status::internal : status::border;  ← ignored
+```
+
+The bug is hidden because the response floods everything (`status::internal` for all
+non-requesters). With a single requester (v1 uses only node 7 and node 50) and a fully
+connected network, flooding reaches both. The Voronoi fragmentation never causes a visible
+failure because the flood bypasses it.
+
+**What is inefficient in v1:**
+- **Response spawn floods O(N) nodes** per response, when the actual path from holder to
+  requester involves O(diameter) nodes. With R concurrent responses: O(N × R) active nodes.
+- **Query spawn may idle as `internal` indefinitely** on non-holder nodes if the holder's
+  `terminated_output` wave is too slow. The `gossip`-based `can_terminate` in the refactored
+  file addresses this (active self-termination), but v1 relies on message-retention expiry.
+
+---
+
+### Prerequisite fixes (apply to all three solutions)
+
+Fix the build errors from the catalogue above before choosing a design:
+
+| Step | Location | Change |
+|------|----------|--------|
+| E1 | `scattered_db_response::hash` | `data_to_hash[1]` / `data_to_hash[0]` (not `fcpp::get<N>`) |
+| E2 | all `sp_collection` lambdas | Params by value: `[](T a, T b){...}` (not `T& a, T& b`) |
+| E3 | `spawn_res_query_map` alias | Key first: `unordered_map<scattered_db_query, spawn_res_query, ...>` |
+| E4 | `storage_init.hpp:43` | `node_t& node` (non-const) |
+| E5 | `storage_init.hpp:46,48,52,54` | Complete `result_of` / `invoke_result` call-signature |
+| E6 | line 472 (v1) / current file | Complete `can_fire_request_data` condition (add `!= node.uid && !has_requested_data`) |
+
+The `gossip` call in the current file is **valid** — `gossip` is defined in
+`collection.hpp` and spreads a value 1 hop/round via `nbr + fold_hood`. It requires
+`bool` in `FUN_EXPORT` (which is already present). Keep it for faster self-termination
+of the query spawn. The `bool` in `FUN_EXPORT` is specifically for `gossip`'s `nbr<bool>`.
+
+---
+
+### Solution A — Two spawns, fixed (minimal change from v1)
+
+Keep the two-spawn architecture. Remove the globally-computed `abf_distance + sp_collection`
+(they produce a Voronoi-fragmented gradient and are not needed). Move `bis_distance +
+sp_collection` *inside the response spawn*, rooted at the **holder**. The query spawn
+continues to flood (correct — the holder location is unknown at query time).
+
+**Why the query must still flood:** There is no a-priori knowledge of where the holder is.
+Every node potentially holds the requested key (the database is *scattered*). A flood is
+the only search strategy that guarantees finding the holder regardless of topology.
+
+**Why the response can be routed:** Both endpoints are known — `resp.holder` and
+`resp.requester` are fields in the response key. Build a per-spawn spanning tree rooted at
+the holder; the requester is in the holder's subtree along the path.
+
+#### Termination when data is absent — timeout via hop-count frontier
+
+`gossip` alone cannot terminate the query spawn when no holder exists: `has_data` is
+always `false`, so `can_terminate` never becomes `true`. The process runs forever.
+
+**Fix:** track the *flood frontier* (how far the spawn has spread in hops from the
+requester) inside the spawn body. When the frontier exceeds the estimated network diameter
+(plus a tolerance), the entire network has been searched without finding the holder →
+declare data absent → all nodes return `status::terminated`.
+
+The diameter is computed fully aggregate, with no hardcoded assumptions:
+
+1. Elect the minimum-UID node as reference: `gossip_min(CALL, node.uid)`.
+2. Compute hop distance from that node: `abf_hops(CALL, node.uid == net_leader)`.
+3. Gossip the maximum: `gossip_max(CALL, dist_ldr)` = eccentricity of the leader.
+4. `diameter ≤ 2 × eccentricity(any node)` (graph theory: diameter ≤ 2 × radius ≤
+   2 × eccentricity). Apply tolerance: `timeout = 2 × eccentricity × (1 + tolerance)`.
+
+Inside the query spawn, track the frontier with `abf_hops + gossip_max`. Both must be
+called **unconditionally** (before any `if` branch) to keep the CALL trace synchronized.
+
+`TIMEOUT_TOLERANCE` is a named `constexpr` (not a magic number):
+```cpp
+constexpr real_t TIMEOUT_TOLERANCE = 0.25;  // 25% headroom above diameter estimate
+```
+
+```cpp
+// REMOVE: global abf_distance + sp_collection (lines 447-464 in v1)
+// Reason: Voronoi-fragmented with multiple requesters; not needed for correct routing.
+
+// ── Network diameter estimate (outside spawns, captured in query-spawn lambda) ──────
+// gossip_min elects the minimum UID as a globally-consistent reference node.
+// abf_hops gives each node its hop distance from that reference.
+// gossip_max spreads the maximum → eccentricity of the reference node.
+// 2 × eccentricity(v) ≥ diameter for any v (graph-theoretic upper bound).
+// +1 guards against convergence lag on the first few rounds.
+device_t net_leader   = gossip_min(CALL, node.uid);
+hops_t   dist_ldr     = abf_hops(CALL, node.uid == net_leader);
+hops_t   eccentricity = gossip_max(CALL, dist_ldr);
+hops_t   timeout_hops = static_cast<hops_t>(
+    static_cast<real_t>(2 * eccentricity) * (1.0f + TIMEOUT_TOLERANCE) + 1.0f
+);
+
+// Query spawn — flood (holder unknown); gossip + timeout for self-termination
+spawn_res_query_map query_res = spawn(CALL, [&](scattered_db_query const& message_query) {
+    bool is_req   = (node.uid == message_query.requester);
+    bool has_data = has_requested_data(CALL, message_query.key);
+    if (is_req)
+        node.storage(tags::node_last_requested_data{}) = message_query.to_string();
+
+    // ── Flood frontier (unconditional) ──────────────────────────────────────────────
+    // abf_hops measures hop distance from the requester within the active spawn nodes.
+    // gossip_max spreads the maximum → how far the flood has reached.
+    // When frontier > timeout_hops the whole network has been covered: data absent.
+    hops_t hops_from_req  = abf_hops(CALL, is_req);
+    hops_t flood_frontier = gossip_max(CALL, hops_from_req);
+    bool   timed_out      = (flood_frontier > timeout_hops);
+
+    // Unified termination signal: holder found OR data declared absent
+    bool can_terminate = gossip(CALL, has_data || timed_out,
+                                [](bool x, bool y){ return x || y; });
+    status s = has_data        ? status::terminated_output  // holder found
+             : can_terminate   ? status::terminated         // data absent (timeout) or
+             :                   status::internal;          //   termination wave passing
+    return make_tuple(
+        static_cast<spawn_res_query>(make_tuple(
+            message_query, has_data,
+            has_data ? get_data(CALL, message_query.key)
+                     : static_cast<s_db_data>(node.position())
+        )), s
+    );
+}, query);
+
+// Phase A — collect responses_to_inject (unchanged from v1)
+
+// Response spawn — FIXED: routed from holder to requester
+spawn_res_response_map response_res = spawn(CALL, [&](scattered_db_response const& resp) {
+    bool is_requester = (node.uid == resp.requester);
+    bool is_holder    = (node.uid == resp.holder);
+    // Per-spawn tree rooted at holder — no Voronoi fragmentation
+    real_t dist_from_holder = bis_distance(CALL, is_holder, 1, communication_range);
+    set_nodes_to_source_t subtree_from_holder = sp_collection(CALL,
+        dist_from_holder,
+        set_nodes_to_source_t{node.uid}, set_nodes_to_source_t{},
+        [](set_nodes_to_source_t a, set_nodes_to_source_t b){
+            a.insert(b.begin(), b.end()); return a;
+        }
+    );
+    // requester in subtree ↔ this node is on the holder→requester path
+    bool inpath = subtree_from_holder.count(resp.requester) > 0;
+    status s = is_requester ? status::terminated_output
+             : inpath       ? status::internal : status::border;
+    if (is_requester) {
+        node.storage(tags::node_data_requested{}) = false;
+        node.storage(tags::node_color{}) = color(BLACK);
+    }
+    return make_tuple(resp, s);
+}, responses_to_inject);
+```
+
+**Why `subtree_from_holder.count(resp.requester) > 0` routes correctly:**  
+On path requester→A→B→holder: `dist_from_holder[holder]=0`, `dist_from_holder[B]=1`,
+`dist_from_holder[A]=2`, `dist_from_holder[requester]=3`. B's subtree (toward holder)
+contains both A and the requester → `inpath=true` for B. Off-path node X's subtree never
+contains the requester → `border`. Only O(path length) nodes participate in the response.
+
+**Why `flood_frontier > timeout_hops` is the right termination criterion:**  
+`hops_from_req` at a node = its hop distance from the requester, measured within the
+active spawn population. `gossip_max` propagates the global maximum back to everyone.
+When the frontier exceeds `2 × eccentricity × (1 + tolerance)`, every reachable node has
+been visited (eccentricity is at most the diameter; 2× is a proven upper bound).
+The `gossip` spreads `timed_out = true` in one more pass, causing all remaining `internal`
+nodes to return `terminated`.
+
+**Convergence note:** The diameter estimate converges in O(diameter) rounds after startup
+(gossip_min + abf_hops + gossip_max all need time to spread). A query that fires on the
+very first round may have a slightly underestimated `timeout_hops`. The `+ 1` in the
+timeout formula adds a one-hop safety margin; for critical deployments, a larger additive
+offset (e.g., `+ 3`) can be used.
+
+**Updated `FUN_EXPORT` for Solution A:**
+```cpp
+FUN_EXPORT execute_scattered_db_query_t = export_list<
+    compute_key_query_t,
+    device_t,                                          // gossip_min<device_t> outside spawns
+    hops_t,                                            // abf_hops + gossip_max (outside AND inside query spawn)
+    bool,                                              // gossip<bool> inside query spawn
+    uint,
+    bis_distance_t,                                    // inside response spawn
+    sp_collection_t<real_t, set_nodes_to_source_t>,   // inside response spawn
+    spawn_t<scattered_db_query, status>,
+    spawn_t<spawn_res_response, status>
+>;
+```
+`abf_distance_t`, standalone `real_t` (unduplicated), and standalone
+`set_nodes_to_source_t` are removed (no global gradient computation). `device_t` is re-added
+for `gossip_min`. `hops_t` covers `abf_hops_t`, `gossip_max_t<hops_t>` (both outside
+and inside the query spawn). `bis_distance_t` and `sp_collection_t` remain for the response
+spawn. The three new outer primitives (`gossip_min`, `abf_hops`, `gossip_max`) must appear
+before any `spawn` call in `execute_scattered_db_query` to keep the CALL order consistent.
+
+---
+
+### Solution B — Matrioska (inner spawn inside outer spawn)
+
+The outer query spawn floods the network searching for the holder. When the holder is found,
+it injects a key into an **inner response spawn** (called inside the outer spawn body, using
+the three-phase pattern). The inner spawn routes the response from holder back to requester.
+The outer spawn terminates at the holder (`status::terminated`, no output); the inner spawn
+terminates at the requester (`status::terminated_output`).
+
+```cpp
+spawn_res_query_map query_res = spawn(CALL, [&](scattered_db_query const& message_query) {
+    bool has_data   = has_requested_data(CALL, message_query.key);
+    bool is_req     = (node.uid == message_query.requester);
+    bool can_term   = gossip(CALL, has_data, [](bool x, bool y){ return x || y; });
+
+    // INNER three-phase: every outer-active node calls inner spawn once per round
+    common::option<scattered_db_response> inner_key;
+    if (has_data) {
+        inner_key.emplace(
+            message_query.key, get_data(CALL, message_query.key),
+            message_query.requester, node.uid, 0u, node.current_time()
+        );
+    }
+    auto inner_res = spawn(CALL, [&](scattered_db_response const& resp) {
+        bool is_r = (node.uid == resp.requester);
+        bool is_h = (node.uid == resp.holder);
+        real_t d  = bis_distance(CALL, is_h, 1, communication_range);
+        set_nodes_to_source_t sub = sp_collection(CALL, d,
+            set_nodes_to_source_t{node.uid}, set_nodes_to_source_t{},
+            [](set_nodes_to_source_t a, set_nodes_to_source_t b){
+                a.insert(b.begin(), b.end()); return a;
+            });
+        bool inpath = sub.count(resp.requester) > 0;
+        status s_in = is_r     ? status::terminated_output
+                    : inpath   ? status::internal : status::border;
+        return make_tuple(resp, s_in);
+    }, inner_key);
+
+    // Consume inner result at requester
+    if (is_req) {
+        for (auto const& [k_r, v_r] : inner_res) {
+            node.storage(tags::node_data_got{})[k_r.to_string()] = v_r.data;
+            node.storage(tags::node_data_requested{}) = false;
+        }
+    }
+
+    // Outer status: terminate at holder (no output); active self-terminate once found
+    status s_out = has_data   ? status::terminated
+                 : can_term   ? status::terminated
+                 :              status::internal;
+    return make_tuple(
+        static_cast<spawn_res_query>(make_tuple(
+            message_query, has_data,
+            has_data ? get_data(CALL, message_query.key)
+                     : static_cast<s_db_data>(node.position())
+        )), s_out
+    );
+}, query);
+// No second top-level spawn needed — inner spawn handles delivery
+```
+
+**`FUN_EXPORT` for Solution B:**
+```cpp
+FUN_EXPORT execute_scattered_db_query_t = export_list<
+    compute_key_query_t,
+    bool,                                              // gossip
+    uint,
+    bis_distance_t,                                    // inside inner spawn
+    sp_collection_t<real_t, set_nodes_to_source_t>,   // inside inner spawn
+    spawn_t<scattered_db_query, status>,               // outer spawn
+    spawn_t<scattered_db_response, status>             // inner spawn (nested inside outer)
+>;
+```
+
+**Trade-off vs Solution A:**  
+Every node holding the outer query process (O(N) during the search phase) calls the inner
+spawn every round. Most rounds the inner key set is empty, but the CALL invocation still
+occurs on all O(N) active outer nodes. Solution A's response spawn only touches O(N) nodes
+on the round the holder is found, then O(path length) nodes each subsequent round.
+
+---
+
+### Solution C — State machine (recycle first spawn)
+
+One spawn body manages both phases using `old` inside the spawn body to persist per-process
+state. Phase 1 (search): all nodes `internal`, flooding the network. When the holder is
+detected, its UID is stored in the per-process state. Phase 2 (response): all nodes switch
+routing — `bis_distance + sp_collection` now rooted at the stored holder UID.
+
+**Critical invariant:** All FCPP primitives (`old`, `bis_distance`, `sp_collection`) must be
+called **unconditionally** in the same order every round, even when their results are only
+used in one phase. Move the conditional on their results, not the calls themselves:
+
+```cpp
+using query_state_t = tuple<bool, device_t, s_db_data>;
+// fields: <found, holder_uid, data>
+
+spawn(CALL, [&](scattered_db_query const& message_query) {
+    bool has_data = has_requested_data(CALL, message_query.key);
+    bool is_req   = (node.uid == message_query.requester);
+
+    // Phase state: persisted per-process per-node via old
+    query_state_t state = old(CALL,
+        static_cast<query_state_t>(make_tuple(false, (device_t)0, s_db_data{})),
+        [&](query_state_t const& prev) -> query_state_t {
+            if (get<0>(prev)) return prev;   // already found, keep
+            if (has_data) return make_tuple(true, node.uid, get_data(CALL, message_query.key));
+            return prev;
+        }
+    );
+    bool     found  = get<0>(state);
+    device_t holder = get<1>(state);
+    s_db_data data  = get<2>(state);
+
+    // UNCONDITIONAL primitive calls — results used only in phase 2
+    bool is_holder  = found && (node.uid == holder);
+    real_t d        = bis_distance(CALL, is_holder, 1, communication_range);
+    set_nodes_to_source_t sub = sp_collection(CALL, d,
+        set_nodes_to_source_t{node.uid}, set_nodes_to_source_t{},
+        [](set_nodes_to_source_t a, set_nodes_to_source_t b){
+            a.insert(b.begin(), b.end()); return a;
+        }
+    );
+    bool gossip_found = gossip(CALL, found, [](bool x, bool y){ return x || y; });
+
+    if (!gossip_found) {
+        // Phase 1: search — flood
+        return make_tuple(
+            static_cast<spawn_res_query>(make_tuple(message_query, false, s_db_data{})),
+            status::internal
+        );
+    }
+
+    // Phase 2: response — route from holder to requester
+    bool inpath = sub.count(message_query.requester) > 0;
+    status s = is_req  ? status::terminated_output
+             : inpath  ? status::internal : status::border;
+    if (is_req) {
+        node.storage(tags::node_data_got{})[message_query.to_string()] = data;
+        node.storage(tags::node_data_requested{}) = false;
+    }
+    return make_tuple(
+        static_cast<spawn_res_query>(make_tuple(message_query, found, data)),
+        s
+    );
+}, query);
+```
+
+**`FUN_EXPORT` for Solution C:**
+```cpp
+FUN_EXPORT execute_scattered_db_query_t = export_list<
+    compute_key_query_t,
+    query_state_t,                                     // old<query_state_t> inside spawn
+    bool,                                              // gossip's nbr<bool>
+    uint,
+    bis_distance_t,
+    sp_collection_t<real_t, set_nodes_to_source_t>,
+    spawn_t<scattered_db_query, status>                // single spawn
+>;
+```
+
+**Trade-off vs Solutions A/B:**  
+After the holder is found, `gossip_found` must propagate to ALL active nodes (~O(N)) before
+they switch to phase 2. This takes O(diameter) extra rounds. During that window, phase 1
+nodes still return `internal` (flooding). Solution A/B start the response in the same round
+the holder fires. Solution C also carries `(found, holder, data)` state on every active node.
+Use it when a single key type is a strict requirement (e.g., exactly-once delivery tracking).
+
+---
+
+### Recommendation
+
+**Use Solution A** for `scattered_database.cpp`. It is the smallest departure from the
+working v1 structure, correctly handles any number of simultaneous requesters (no Voronoi
+problem), and routes the response efficiently (O(path length) participating nodes). The
+query flood is unavoidable; only the response benefits from routing, and Solution A achieves
+that with a clean two-spawn separation.
+
+**Solution B** (matrioska) is the idiomatic aggregate choice when the response must be
+logically contained within the query process (e.g., for exactly-once semantics on the key).
+The cost is that all O(N) outer-active nodes invoke the inner spawn machinery every round.
+
+**Solution C** (state machine) is theoretically the most elegant (one key, one process) but
+introduces an O(diameter)-round phase-switch delay and higher per-process memory footprint.
+
+---
+
+## Implementation status — Solution A applied (2026-06-11)
+
+`scattered_database.cpp` has been updated to implement Solution A. All changes are in
+`execute_scattered_db_query`:
+
+| Change | Location | Description |
+|--------|----------|-------------|
+| `TIMEOUT_TOLERANCE` constant | namespace scope | `constexpr real_t TIMEOUT_TOLERANCE = 0.25` |
+| Diameter estimation | before query spawn | `gossip_min + abf_hops + gossip_max` → `timeout_hops` |
+| Query spawn body | inside spawn lambda | `abf_hops + gossip_max` flood frontier; `gossip(has_data \|\| timed_out)` |
+| Response spawn body | inside spawn lambda | `bis_distance(is_holder)` + `sp_collection` → `inpath`; proper `border` status |
+| `FUN_EXPORT` | after function | Removed `abf_distance_t`, `set_nodes_to_source_t`, `real_t` (standalone); added `hops_t` |
+
+Build command (from `fcpp-exercises/`):
+```bash
+./make.sh gui run -O scattered_database
+```
+

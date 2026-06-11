@@ -147,6 +147,85 @@ for (auto const& [k, v] : results) { ... }
 - `FUN_EXPORT` unchanged: `spawn_t<K, B>` covers any number of simultaneous processes
 - Use `std::vector<K>` (simplest, no extra operators needed) or `std::set`/`std::unordered_set<K>` to de-duplicate
 
+### Aggregate primitives inside spawn — per-message routing (§7)
+
+`bis_distance` and `sp_collection`/`mp_collection` can be called **inside the spawn
+body**. Each key's trace slot is isolated → independent spanning trees per key.
+Mandatory when the routing tree must depend on the message (e.g. rooted at sender):
+
+```cpp
+spawn(CALL, [&](message const& m) {
+    double ds_m    = bis_distance(CALL, node.uid == m.from, 1, 100);
+    set_t  below_m = sp_collection(CALL, ds_m, set_t{node.uid}, set_t{}, accumulate);
+    bool inpath    = below_m.count(m.to) > 0;
+    ...
+}, m);
+```
+
+**Multi-source Voronoi trap:** `bis_distance` with multiple sources outside spawn
+fragments `below` into Voronoi cells. Neither `sp_collection` nor `mp_collection`
+outside spawn can route across cell boundaries. Fix: move primitives inside spawn.
+
+**`mp_collection` does NOT fix multi-source routing on its own.** It is a
+fault-tolerance upgrade (multi-path vs single-path) applicable *within* the
+per-message pattern. Use with `divide = identity` for set accumulators.
+
+Full analysis: `SPAWN_explanation.md §7`, `sp_collection.md §"Multiple sources"`.
+
+### Use-and-consume (ping-pong) — query floods, response routes (§8)
+
+`scattered_database` pattern: requester fires query → floods O(N) to find unknown holder →
+holder sends response back → response terminates at requester. Query = search (must flood);
+response = route (both endpoints known → O(path length) participants).
+
+**Eternal-internal fix:** without a termination signal, non-holder `internal` nodes stay alive
+indefinitely. Use `gossip` inside the query spawn to propagate "found" and self-terminate:
+
+```cpp
+bool can_terminate = gossip(CALL, has_data, [](bool x, bool y){ return x || y; });
+status s = has_data ? status::terminated_output
+         : can_terminate ? status::terminated : status::internal;
+```
+
+`gossip` is in `collection.hpp`. Its `nbr<bool>` requires `bool` in `FUN_EXPORT`.
+
+**Termination failure — two modes (critical):**
+1. *Holder exists but slow:* `gossip(CALL, has_data, OR)` spreads "found" → `terminated` before wave.
+2. *Data absent:* `has_data` always `false`; `gossip` alone never fires → eternal `internal`. Fix: hop-count timeout.
+
+**Absent-data timeout (fully aggregate, no hardcoded size assumptions):**
+```cpp
+// Outside spawns — diameter upper bound via elected leader
+device_t net_leader   = gossip_min(CALL, node.uid);
+hops_t   dist_ldr     = abf_hops(CALL, node.uid == net_leader);
+hops_t   eccentricity = gossip_max(CALL, dist_ldr);
+hops_t   timeout_hops = static_cast<hops_t>(
+    static_cast<real_t>(2 * eccentricity) * (1.0f + TIMEOUT_TOLERANCE) + 1.0f);
+// Inside query spawn — unconditional
+hops_t flood_frontier = gossip_max(CALL, abf_hops(CALL, is_req));
+bool   can_terminate  = gossip(CALL, has_data || (flood_frontier > timeout_hops), OR);
+```
+`diameter ≤ 2 × eccentricity(any node)` (graph theory). `TIMEOUT_TOLERANCE` = named `constexpr real_t`.
+Primitives: `gossip_min` / `gossip_max` / `gossip` in `collection.hpp`; `abf_hops` in `spreading.hpp`.
+Add `device_t` and `hops_t` to `FUN_EXPORT`.
+
+**Three designs for the response leg:**
+
+- **Solution A (two spawns, recommended):** Response spawn separate from query. Move
+  `bis_distance + sp_collection` inside response spawn, rooted at **holder**.
+  `inpath = subtree_from_holder.count(requester) > 0`. O(path length) nodes participate.
+- **Solution B (matrioska):** Inner response spawn called inside outer query spawn body
+  (three-phase pattern). Outer terminates at holder; inner routes back. O(N) outer nodes
+  invoke inner spawn machinery every round regardless.
+- **Solution C (state machine):** Single spawn, `old` tracks `(found, holder, data)`.
+  All primitives called unconditionally; phase-gated results only. O(diameter) extra rounds
+  between phases (gossip propagation). Use when single key type is required.
+
+**Global gradient with multiple requesters is broken for the response** — same Voronoi
+fragmentation trap as §7. Always move `bis_distance` inside the response spawn.
+
+Full code + comparison table: `SPAWN_explanation.md §8`, `scattered_database_fix_plan.md § Ping-pong`.
+
 ## FCPP type and template rules (derived from compiler diagnostics)
 
 ### `fcpp::vec<N>` — subscript, not `get<N>`
@@ -158,6 +237,20 @@ Both use `if_signature<G, T(T,T)>` = `is_convertible<G, std::function<T(T,T)>>`.
 - Lambda params must be **by value** (or at most `const T&`). Non-const `T&` fails.
 - A generic `[](auto a, auto b)` lambda fails if the body (e.g. `a | b`) doesn't compile for `T`.
 - `std::set` has no `operator|`; set union: `a.insert(b.begin(), b.end()); return a;`
+
+### `gossip` combiner must return `T` — beware `bool | bool → int`
+
+`gossip` exports its combiner's return type via `nbr`. `bool | bool` (bitwise OR) returns
+`int` in C++, which is NOT `bool`. If `int` is not in the `export_list`, FCPP fires:
+```
+error: unsupported type access (add type A to exports type list)
+```
+**Fix:** use `||` (logical OR) so the combiner returns `bool`:
+```cpp
+// WRONG:  [](bool x, bool y){ return x | y; }   → int
+// CORRECT:[](bool x, bool y){ return x || y; }  → bool
+```
+Same applies to any combiner that widens the type (e.g. arithmetic on `short` → `int`).
 
 ### FCPP node must be non-const
 Every FCPP primitive modifies `node.stack_trace`. Any function using FCPP primitives must

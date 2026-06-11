@@ -165,6 +165,16 @@ double dist = bis_distance(CALL, is_source_node, 1.0, COMM_RADIUS);
 double dist = abf_distance(CALL, is_source_node);
 ```
 
+### `abf_hops` — hop-count distance from nearest source (integer)
+```cpp
+// C++: abf_hops(CALL, is_source)  → hops_t   (hops_t = signed integer, 16-bit default)
+// Header: lib/coordination/spreading.hpp
+// Returns integer hop count (0 at source, 1 at 1-hop neighbours, etc.)
+// Use when you need hop counts rather than Euclidean/weighted distances.
+hops_t hops = abf_hops(CALL, node.uid == leader_id);
+// FUN_EXPORT: add hops_t (abf_hops_t = export_list<hops_t>)
+```
+
 ### `broadcast` — disseminate source's value to entire network
 ```cpp
 // C++: broadcast(CALL, gradient_dist, source_value)  → T
@@ -196,6 +206,22 @@ double diameter = mp_collection(CALL,
     [](double a, double b){ return std::max(a, b); },
     [](double x, int n){ return x; }  // divider (no averaging here)
 );
+```
+
+### `gossip` / `gossip_min` / `gossip_max` — network-wide value spreading
+```cpp
+// Header: lib/coordination/collection.hpp
+// gossip: spread a value with a binary combiner (converges to combined global value)
+bool found = gossip(CALL, local_bool, [](bool a, bool b){ return a | b; });
+
+// gossip_min: spread the network-wide minimum
+device_t leader = gossip_min(CALL, node.uid);   // min UID across all nodes
+
+// gossip_max: spread the network-wide maximum
+hops_t eccentricity = gossip_max(CALL, my_hop_dist);
+
+// gossip_t<T> = export_list<T> — add T to FUN_EXPORT
+// e.g. gossip_min<device_t> → add device_t;  gossip_max<hops_t> → add hops_t
 ```
 
 ### `rectangle_walk` — random walk inside a box
@@ -402,6 +428,85 @@ class MyExample(AbstractExample):
 if __name__ == "__main__":
     MyExample().run(50)
 ```
+
+---
+
+## Advanced: spawn use-and-consume (ping-pong) pattern
+
+**Pattern:** requester fires query → floods O(N) to find unknown holder → holder responds →
+response routes O(path length) back → both spawns terminate. No persistent channels.
+
+### Eternal-internal problem — two failure modes
+
+Without a termination signal, non-holder `internal` nodes live indefinitely:
+1. **Holder exists but slow** — `gossip(CALL, has_data, OR)` propagates "found" → all non-holders
+   return `status::terminated` before the termination wave reaches them.
+2. **Data absent** — `has_data` is always `false`; `gossip` alone never fires → eternal `internal`.
+   Fix: hop-count timeout using the aggregate diameter estimate.
+
+### Absent-data timeout — fully aggregate, no hardcoded size assumptions
+
+```cpp
+constexpr real_t TIMEOUT_TOLERANCE = 0.25;  // 25% headroom above diameter estimate
+
+// OUTSIDE spawns — compute diameter upper bound
+// Theorem: diameter ≤ 2 × eccentricity(any node)
+device_t net_leader   = gossip_min(CALL, node.uid);
+hops_t   dist_ldr     = abf_hops(CALL, node.uid == net_leader);
+hops_t   eccentricity = gossip_max(CALL, dist_ldr);
+hops_t   timeout_hops = static_cast<hops_t>(
+    static_cast<real_t>(2 * eccentricity) * (1.0f + TIMEOUT_TOLERANCE) + 1.0f);
+
+// INSIDE query spawn — unconditional flood-frontier + unified termination
+hops_t hops_from_req  = abf_hops(CALL, is_requester);
+hops_t flood_frontier = gossip_max(CALL, hops_from_req);
+bool   timed_out      = (flood_frontier > timeout_hops);
+bool   can_terminate  = gossip(CALL, has_data || timed_out,
+                               [](bool x, bool y){ return x || y; });
+status s = has_data      ? status::terminated_output
+         : can_terminate ? status::terminated
+         :                 status::internal;
+```
+
+### Response routing — move bis_distance + sp_collection INSIDE response spawn
+
+```cpp
+// INSIDE response spawn — rooted at holder; avoids Voronoi fragmentation
+spawn(CALL, [&](scattered_db_response const& resp) {
+    bool is_requester = (node.uid == resp.requester);
+    bool is_holder    = (node.uid == resp.holder);
+    real_t dist = bis_distance(CALL, is_holder, 1, COMM_RANGE);
+    set_nodes_to_source_t sub = sp_collection(CALL, dist,
+        set_nodes_to_source_t{node.uid}, set_nodes_to_source_t{},
+        [](set_nodes_to_source_t a, set_nodes_to_source_t b){
+            a.insert(b.begin(), b.end()); return a; });
+    bool inpath = sub.count(resp.requester) > 0;
+    status s = is_requester ? status::terminated_output
+             : inpath       ? status::internal : status::border;
+    return make_tuple(resp, s);
+}, responses_to_inject);
+```
+
+**Critical:** if `bis_distance` is computed OUTSIDE spawn with multiple requesters,
+`sp_collection` produces Voronoi-partitioned subtrees — cross-cell responses are silently
+dropped. Always move both inside the spawn.
+
+### FUN_EXPORT for the two-spawn solution
+```cpp
+FUN_EXPORT execute_t = export_list<
+    compute_key_query_t,
+    device_t,                                         // gossip_min<device_t>
+    hops_t,                                           // abf_hops + gossip_max (outside + inside)
+    bool,                                             // gossip<bool> inside query spawn
+    uint,
+    bis_distance_t,                                   // inside response spawn
+    sp_collection_t<real_t, set_nodes_to_source_t>,  // inside response spawn
+    spawn_t<QueryKey, status>,
+    spawn_t<ResponseKey, status>
+>;
+```
+
+Full reference: `SPAWN_explanation.md §8`, `scattered_database_fix_plan.md § Ping-pong`.
 
 ---
 

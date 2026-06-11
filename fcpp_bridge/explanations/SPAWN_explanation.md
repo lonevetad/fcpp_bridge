@@ -643,3 +643,239 @@ terminate independently, and never share state.
    separate processes with isolated state — they do not share `old`/`nbr` history.
 5. **`FUN_EXPORT` does not change.** `spawn_t<K, B>` already covers multiple
    simultaneous processes.
+
+---
+
+## §7. Aggregate Primitives Inside the `spawn` Body — Per-Message Routing
+
+### The problem with a global spanning tree
+
+`message_dispatch.hpp` (FCPP sample project) pre-computes a single spanning tree
+*outside* the spawn call and lets all concurrent messages share it:
+
+```cpp
+bool is_src = node.uid == src_id;               // only one root
+double ds   = bis_distance(CALL, is_src, 1, 100);
+set_t below = sp_collection(CALL, ds, set_t{node.uid}, set_t{}, ...);
+
+map_t r = spawn(CALL, [&](message const& m) {
+    bool inpath = below.count(m.from) + below.count(m.to) > 0;
+    status s = node.uid == m.to ? status::terminated_output :
+               inpath            ? status::internal          : status::border;
+    return make_tuple(node.current_time(), s);
+}, m);
+```
+
+This works when exactly one node is the source. Node `v` is "on path" between
+`m.from` and `m.to` when either endpoint is in `v`'s subtree — correct because
+on a single-rooted spanning tree the path between any two nodes passes through
+their LCA, and a node is on that path iff either endpoint is a descendant.
+
+### What breaks with multiple sources
+
+If `is_src` is `true` for more than one node (e.g. `(node.uid % 31) == 0`):
+
+1. `bis_distance` computes distance to the **nearest** source → Voronoi partition.
+2. `sp_collection` builds a separate spanning tree per cell. `below[v]` only contains
+   UIDs in `v`'s own Voronoi cell.
+3. For a message where `m.from` and `m.to` are in different cells, every cross-cell
+   node has `below.count(m.from)==0` and `below.count(m.to)==0` → `inpath=false` →
+   status `border` → process cannot propagate across the cell boundary.
+
+**Result: cross-cell messages are silently dropped.** No exception is raised.
+
+### The fix — primitives inside spawn
+
+Because every spawn key runs the process body with its own isolated `old`/`nbr`
+history (§1 — key hash is pushed onto the trace stack), `bis_distance` and
+`sp_collection` inside the body behave as fully independent aggregate sub-programs
+per key. Each message can build its own spanning tree rooted at `m.from`:
+
+```cpp
+map_t r = spawn(CALL, [&](message const& m) {
+    // Per-message spanning tree rooted at m.from
+    bool is_sender = (node.uid == m.from);
+    double ds_m    = bis_distance(CALL, is_sender, 1, 100);
+    set_t  below_m = sp_collection(CALL, ds_m, set_t{node.uid}, set_t{},
+                         [](set_t x, set_t const& y){
+                             x.insert(y.begin(), y.end()); return x;
+                         });
+    // On a tree rooted at m.from: on-path iff receiver is in subtree
+    bool inpath = below_m.count(m.to) > 0;
+    status s = node.uid == m.to ? status::terminated_output :
+               inpath            ? status::internal          : status::border;
+    return make_tuple(node.current_time(), s);
+}, m);
+```
+
+Key changes: tree root is `m.from` (not a hardcoded `src_id`); `inpath` checks
+only the receiver (not both endpoints — checking the sender side is redundant on a
+tree rooted at the sender); no global `below` or `parent` computed outside spawn.
+
+### FUN_EXPORT
+
+`bis_distance_t` and `sp_collection_t<double, set_t>` remain in `FUN_EXPORT`
+regardless of whether they are called inside or outside spawn — they still
+contribute `nbr` communication types that must be declared at the export level.
+`device_t` can be removed if the external `parent` computation is dropped:
+
+```cpp
+FUN_EXPORT main_t = export_list<rectangle_walk_t<3>, bis_distance_t,
+    sp_collection_t<double, set_t>, spawn_t<message, status>, map_t>;
+```
+
+### Could `mp_collection` avoid this fix?
+
+**No.** `mp_collection` (multi-path) differs from `sp_collection` (single-path)
+only in *how many paths* data flows along toward the root — not in which *direction*
+or *which root*. Both are gradient-based: they aggregate values flowing toward the
+lowest-distance node. With a Voronoi-fragmented distance field (multiple sources),
+data still cannot reliably cross cell boundaries with either primitive:
+
+- `sp_collection`: single parent per node, strictly within cell.
+- `mp_collection`: flows toward all lower-distance neighbours. At the Voronoi
+  boundary, the comparison `d_B > d_A` (distance to source B vs. source A) is
+  geometrically arbitrary — not a reliable cross-cell routing criterion.
+
+`mp_collection` IS a meaningful upgrade **after** the fix is applied. Inside spawn,
+rooted at `m.from`, multi-path collection provides better fault tolerance:
+
+```cpp
+// mp_collection as drop-in for sp_collection inside spawn
+set_t below_m = mp_collection(CALL, ds_m,
+    set_t{node.uid}, set_t{},
+    [](set_t x, set_t const& y){ x.insert(y.begin(), y.end()); return x; },
+    [](set_t s, size_t) { return s; }  // divide: identity (set union is idempotent)
+);
+// inpath check unchanged: below_m.count(m.to) > 0
+```
+
+| | `sp_collection` inside spawn | `mp_collection` inside spawn |
+|---|---|---|
+| Path count | One per node | Multiple (all lower-distance neighbours) |
+| Fault tolerance | Single-link failure loses path | Survives partial link failures |
+| `divide` param | Not needed | Required (identity for sets) |
+| `FUN_EXPORT` | `sp_collection_t<P,T>` includes `device_t` | `mp_collection_t<P,T>` — no `device_t` |
+| Correctness | ✓ | ✓ |
+
+**Rule:** `mp_collection` is a robustness trade-off *within* the per-message pattern,
+not an escape from it. The fix (primitives inside spawn) is mandatory either way.
+
+---
+
+## §8 — Use-and-consume (ping-pong) pattern: query → hold → respond
+
+### The pattern
+
+A **requester** fires a query for data it does not hold. The query spreads until it reaches
+the **holder**. The holder sends the data back. Both the query and response terminate after
+delivery — no persistent channels. This differs from a channel (§4) in that neither node
+keeps its role across query-response pairs.
+
+The key asymmetry: **query = search** (flood, holder unknown); **response = route** (both
+endpoints known, O(path length) participants possible).
+
+---
+
+### Termination failures — two modes
+
+1. **Holder exists but slow:** `gossip(CALL, has_data, OR)` propagates "found" actively →
+   `status::terminated` before the built-in wave arrives.
+
+2. **Data absent — process runs forever:** `has_data` is always `false`; `gossip` never
+   fires. The process stays alive on O(N) nodes indefinitely. `gossip` alone cannot fix this.
+
+**Fix for absent data — hop-count timeout:**  
+Compute the network diameter fully aggregate (no hardcoded assumptions), then terminate
+when the flood frontier exceeds `diameter × (1 + tolerance)`:
+
+```cpp
+// Outside spawns — diameter estimate, updated every round
+device_t net_leader   = gossip_min(CALL, node.uid);   // elect min-UID as reference
+hops_t   dist_ldr     = abf_hops(CALL, node.uid == net_leader);
+hops_t   eccentricity = gossip_max(CALL, dist_ldr);   // eccentricity of leader
+// diameter ≤ 2 × eccentricity(any node) — graph-theoretic upper bound
+hops_t   timeout_hops = static_cast<hops_t>(
+    static_cast<real_t>(2 * eccentricity) * (1.0f + TIMEOUT_TOLERANCE) + 1.0f
+);
+
+// Inside query spawn body — unconditional calls (CALL trace invariant)
+hops_t hops_from_req  = abf_hops(CALL, is_req);          // frontier hop distance
+hops_t flood_frontier = gossip_max(CALL, hops_from_req);  // max frontier globally
+bool   timed_out      = (flood_frontier > timeout_hops);
+bool   can_terminate  = gossip(CALL, has_data || timed_out,
+                               [](bool x, bool y){ return x || y; });
+status s = has_data      ? status::terminated_output
+         : can_terminate ? status::terminated
+         :                 status::internal;
+```
+
+`TIMEOUT_TOLERANCE` is a named `constexpr real_t` (e.g., `0.25` for 25%).  
+`hops_t`, `device_t`, and `bool` must be added to `FUN_EXPORT`.
+
+`gossip_min` / `gossip_max` / `gossip` all in `collection.hpp`.  
+`abf_hops` in `spreading.hpp`.
+
+---
+
+### Three solutions
+
+#### Solution A — two spawns, fixed (recommended)
+
+Remove any globally-computed gradient. Keep the query spawn as a flood with the timeout
+above. Add `bis_distance + sp_collection` **inside the response spawn**, rooted at the
+holder. Only O(path length) nodes participate in the response.
+
+```cpp
+// Response spawn — routed from holder to requester
+spawn(CALL, [&](scattered_db_response const& resp) {
+    bool is_holder    = (node.uid == resp.holder);
+    bool is_requester = (node.uid == resp.requester);
+    real_t d = bis_distance(CALL, is_holder, 1, comm_range);
+    set_t sub = sp_collection(CALL, d, set_t{node.uid}, set_t{},
+        [](set_t a, set_t b){ a.insert(b.begin(), b.end()); return a; });
+    bool inpath = sub.count(resp.requester) > 0;
+    status s = is_requester ? status::terminated_output
+             : inpath       ? status::internal : status::border;
+    return make_tuple(resp, s);
+}, responses_to_inject);
+```
+
+`FUN_EXPORT` adds `device_t`, `hops_t` (diameter primitives) and keeps `bis_distance_t`,
+`sp_collection_t` (response spawn), `bool` (gossip), `spawn_t` for both key types.
+
+#### Solution B — matrioska (inner spawn inside outer)
+
+Inner response spawn called inside the outer query spawn body, using the three-phase
+pattern. Outer terminates at holder (`status::terminated`); inner routes response back.
+All O(N) outer-active nodes invoke inner spawn machinery every round (empty key most rounds).
+
+#### Solution C — state machine (single spawn, phase reversal)
+
+`old` inside spawn body tracks `(found, holder_uid, data)`. Phase 1 floods; phase 2 routes.
+All FCPP primitives called unconditionally every round — only results are phase-gated:
+
+```cpp
+real_t d = bis_distance(CALL, found && (node.uid == holder), 1, comm_range);
+set_t sub = sp_collection(CALL, d, ...);
+bool gossip_found = gossip(CALL, found, [](bool x, bool y){ return x || y; });
+// if (!gossip_found): return internal; else: use d/sub for routing
+```
+
+O(diameter) extra rounds between phase 1 and phase 2 (gossip propagation delay).
+
+---
+
+### Comparison
+
+| | Solution A | Solution B | Solution C |
+|---|---|---|---|
+| Spawns | 2 sequential | 1 outer + 1 inner | 1 |
+| Response participants | O(path length) | O(path length) inner; O(N) outer | O(N) during gossip; O(path length) after |
+| Phase-switch delay | None | None | O(diameter) rounds |
+| Key types needed | 2 | 2 (nested) | 1 |
+| Recommended for | General use | Single-key requirement | Exactly-once by key |
+
+Full analysis and code in `fcpp-exercises/run/scattered_database_fix_plan.md § Ping-pong`
+and `fcpp-exercises/SPAWN_explanation.md §8`.
+

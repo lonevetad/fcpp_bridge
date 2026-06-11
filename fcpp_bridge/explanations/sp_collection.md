@@ -209,3 +209,101 @@ sp_collection(d, 1, 0, lambda a, b: a + b)
 4. **Self-healing**: if the gradient changes (e.g. source moves), the spanning
    tree re-forms automatically and `sp_collection` re-aggregates within a few
    rounds.
+
+---
+
+## Multiple sources — the Voronoi fragmentation trap
+
+### What happens
+
+`bis_distance` with multiple source nodes (`is_source` true for more than one node)
+computes distance to the **nearest** source. The network is silently partitioned into
+Voronoi cells, one per source. `sp_collection` then builds a separate spanning tree
+within each cell. Each node's result only reflects UIDs in its own Voronoi cell.
+
+This is often surprising: no error is raised, the aggregation appears to work, but
+each node's `result` is missing all descendants that happen to be in other cells.
+
+### When it matters for routing
+
+The `message_dispatch.hpp` (FCPP sample project) pattern uses `sp_collection` to
+build `below[v]` = the set of all node UIDs in `v`'s subtree, then checks:
+
+```python
+inpath = (sender_uid in routing_set) or (receiver_uid in routing_set)
+```
+
+With a single global source this is correct: the spanning tree connects all nodes and
+every `routing_set` reflects the true subtree. With multiple sources the routing
+logic silently fails for any message whose sender and receiver are in different
+Voronoi cells — the message process never propagates across the boundary.
+
+### The fix — move `bis_distance` + `sp_collection` inside `spawn`
+
+Primitives inside a `spawn` body run with fully isolated per-key history (each key
+pushes its own hash onto the trace stack). The solution is to build the spanning tree
+**per-message**, rooted at the message's own sender, inside the spawn body:
+
+```cpp
+// C++ (message_dispatch.hpp corrected)
+map_t r = spawn(CALL, [&](message const& m) {
+    bool is_sender = (node.uid == m.from);
+    double ds_m    = bis_distance(CALL, is_sender, 1, 100);   // tree rooted at sender
+    set_t  below_m = sp_collection(CALL, ds_m, set_t{node.uid}, set_t{},
+                         [](set_t x, set_t const& y){
+                             x.insert(y.begin(), y.end()); return x;
+                         });
+    bool inpath = below_m.count(m.to) > 0;   // receiver in subtree = on path
+    status s = node.uid == m.to ? status::terminated_output :
+               inpath            ? status::internal          : status::border;
+    return make_tuple(node.current_time(), s);
+}, m);
+```
+
+```python
+# Python DSL equivalent (fcpp_bridge)
+def _route_message(msg_key):
+    sender, receiver, _ = msg_key
+    dist_from_sender = bis_distance(self_uid() == sender, 1.0, COMM)
+    routing_set = sp_collection(dist_from_sender, frozenset({self_uid()}),
+                                frozenset(), lambda a, b: a | b)
+    inpath = receiver in routing_set
+    if self_uid() == receiver:
+        return (None, STATUS_TERMINATED)
+    elif inpath:
+        return (None, STATUS_INTERNAL)
+    else:
+        return (None, STATUS_BORDER)
+```
+
+Each spawn process builds its own independent spanning tree. CALL synchronization
+is preserved: all nodes that hold the process for key `m` always execute
+`bis_distance` and `sp_collection` once, in order, within the key's trace slot.
+
+### Does `mp_collection` solve the problem without moving inside spawn?
+
+**No.** `mp_collection` (multi-path) changes *how many paths* data flows along, not
+*which root* or *which direction*. Both `sp_collection` and `mp_collection` are
+gradient-based — they aggregate data flowing toward lower-distance nodes. With a
+Voronoi-fragmented distance field, data from one cell cannot reliably reach another
+cell regardless of which collection primitive is used:
+
+- `sp_collection`: single parent strictly within cell.
+- `mp_collection`: flows to all lower-distance neighbours. At the Voronoi boundary,
+  distances from different roots are compared (`d_A` vs `d_B`) — geometrically
+  arbitrary; cross-cell flow is unreliable.
+
+**`mp_collection` IS beneficial *after* the fix is applied** (inside spawn): it
+provides multi-path routing toward the message sender, improving fault tolerance when
+links drop mid-delivery. For `set_t` the divide function is identity (sets
+deduplicate automatically). The `inpath` check is unchanged.
+
+| Scenario | `sp_collection` outside spawn | `mp_collection` outside spawn | Primitives inside spawn |
+|---|---|---|---|
+| Single source | ✓ Correct | ✓ Correct | ✓ Correct |
+| Multiple sources | ✗ Voronoi fragmentation | ✗ Same failure | ✓ Correct |
+| Fault tolerance | Lower | Higher | Higher (with `mp_collection`) |
+
+**Rule:** The fix (primitives inside spawn) is mandatory for multiple-source
+correctness. The `sp_collection` vs `mp_collection` choice is a robustness
+trade-off within the per-message pattern.
