@@ -52,15 +52,15 @@ namespace coordination {
 //! @brief Namespace for component options.
 namespace option { // CONSTANTS
     //! @brief Number of people in the area.
-    constexpr int node_num = 100;
+    constexpr int node_num = 300; // 100;
 
     //! @brief Dimensionality of the space.
     constexpr size_t dim = 2;
 
     //! @brief Width of the network area (the GUI, actually).
-    constexpr int network_width = 700;
+    constexpr int network_width = 1500; // 700;
     //! @brief Height of the network area (the GUI, actually).
-    constexpr int network_height = 500;
+    constexpr int network_height = 1000; // 500;
 
     //! @brief The maximum communication range between nodes.
     constexpr size_t communication_range = 100;
@@ -92,7 +92,9 @@ namespace tags {
     struct node_can_receive_data {};
     struct node_data_sent {};
     struct node_data_received {};
+    struct node_ticks_left {};
     struct node_ticks_status {};
+    struct node_ticks_full_status {};
 }
 
 //
@@ -177,7 +179,7 @@ pulse_map_t<D, T> pulse_data(ARGS,
     uint additional_ticks_in_internal, uint additional_ticks_in_border // config
 ) { CODE
     constexpr uint BITS_TO_SHIFT = 4; // the "status" enum has 9 entries -> the first 4 bits are occupied
-    constexpr uint STATUS_MASK = (1 << (BITS_TO_SHIFT + 1)) - 1;
+    constexpr uint STATUS_MASK = (1 << (BITS_TO_SHIFT /*+ 1*/)) - 1;
     constexpr uint MAX_TICKS = (1<<(31-BITS_TO_SHIFT)) - 1;
     uint ati = (additional_ticks_in_internal > MAX_TICKS) ? MAX_TICKS : additional_ticks_in_internal;
     uint atb = (additional_ticks_in_border > MAX_TICKS) ? MAX_TICKS : additional_ticks_in_border;
@@ -199,29 +201,33 @@ pulse_map_t<D, T> pulse_data(ARGS,
                     ? (uint)status::terminated_output
                     : (((ati + 1) << BITS_TO_SHIFT) | (uint)status::internal),
                 [&](uint current__ticks_left__status){
+                    // if(is_source){ return (uint)status::border; }
                     uint ticks_left = current__ticks_left__status >> BITS_TO_SHIFT;
                     status current_status = static_cast<status>(current__ticks_left__status & STATUS_MASK);
+                    node.storage(tags::node_ticks_left{}) = ticks_left;
                     if(current_status == status::terminated || current_status == status::terminated_output){
                         return current__ticks_left__status;
                     }
                     if(ticks_left <= 1){
                         ticks_left = 0;
-                        if(current_status == status::internal){
+                        if((current_status == status::internal) || (current_status != status::border)){
+                            // mitigate bugs: if the status is neither border or internal (nor terminated*), it becomes border
                             current_status = status::border;
-                            ticks_left = atb;
+                            ticks_left = atb + 1;
                         } else {
                             assert(current_status == status::border);
                             current_status = status::terminated;
                         }
                     }else{
-                        ticks_left--;
+                        --ticks_left;
                     }
                     return (ticks_left << BITS_TO_SHIFT) | (uint)current_status;
                 }
             );
             status curr_status = static_cast<status>(ticks_left__status & STATUS_MASK);
             assert(can_output == (curr_status == status::terminated_output));
-            node.storage(tags::node_ticks_status{}) = to_string(curr_status); // tick_status_to_str(ticks_left__status); //(ticks_left__status >> BITS_TO_SHIFT);
+            node.storage(tags::node_ticks_status{})      = to_string(curr_status); //(ticks_left__status >> BITS_TO_SHIFT);
+            node.storage(tags::node_ticks_full_status{}) = tick_status_to_str(ticks_left__status); // static_cast<uint>(curr_status);
             // set the color
             if(is_source){
                 node.storage(tags::node_color{}) = can_pulse_now ? color(BLACK) : color(PURPLE);
@@ -304,12 +310,14 @@ MAIN() {
     }
     node.storage(node_can_send_data{}) = can_pulse_now;
     node.storage(node_can_receive_data{}) = can_output;
-    
+    node.storage(node_ticks_full_status{}) = "";
+    node.storage(node_ticks_status{}) = node.storage(node_ticks_full_status{});
+    node.storage(node_ticks_left{}) = 0;
 
     // DO THE THING
 
-    constexpr uint additional_ticks_in_internal = 3; //5;
-    constexpr uint additional_ticks_in_border = 1; // 3;
+    constexpr uint additional_ticks_in_internal = 2; //5;
+    constexpr uint additional_ticks_in_border = 2; // 3;
 
     pulse_map_t<data_to_pulse_t, data_to_output_t> res = pulse_data(CALL,
         round_tick, is_source, can_pulse_now, dtp, can_output,
@@ -380,6 +388,8 @@ using store_t = tuple_store<
     , node_data_sent,           coordination::data_to_pulse_t
     , node_data_received,       std::map<device_t, coordination::spawn_res_t>
     , node_ticks_status,        std::string
+    , node_ticks_full_status,   std::string
+    , node_ticks_left,          uint
 >;
 //! @brief The tags and corresponding aggregators to be logged (change as needed).
 using aggregator_t = aggregators<
@@ -404,7 +414,7 @@ DECLARE_OPTIONS(list,
         x,      rectangle_d // initialise position randomly in a rectangle for new nodes
     >,
     dimension<coordination::option::dim>, // dimensionality of the space
-    connector<connect::fixed<coordination::option::node_num, 1, coordination::option::dim>>, // connection allowed within a fixed comm range
+    connector<connect::fixed<coordination::option::communication_range, 1, coordination::option::dim>>, // connection allowed within a fixed comm range
     shape_tag<node_shape>, // the shape of a node is read from this tag in the store
     size_tag<node_size>,   // the size  of a node is read from this tag in the store
     color_tag<node_color>  // the color of a node is read from this tag in the store
