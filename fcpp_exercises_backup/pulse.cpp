@@ -199,29 +199,24 @@ pulse_map_t<D, T> pulse_data(ARGS,
             uint ticks_left__status = old(CALL,
                 can_output
                     ? (uint)status::terminated_output
-                    : (((ati + 1) << BITS_TO_SHIFT) | (uint)status::internal),
+                    : (((ati + atb + 1) << BITS_TO_SHIFT) | (uint)status::internal),
                 [&](uint current__ticks_left__status){
                     // if(is_source){ return (uint)status::border; }
                     uint ticks_left = current__ticks_left__status >> BITS_TO_SHIFT;
                     status current_status = static_cast<status>(current__ticks_left__status & STATUS_MASK);
                     node.storage(tags::node_ticks_left{}) = ticks_left;
-                    if(current_status == status::terminated || current_status == status::terminated_output){
-                        return current__ticks_left__status;
+                    if((current_status == status::terminated) ||
+                        (current_status == status::terminated_output)){
+                        return (uint) current_status;
                     }
-                    if(ticks_left <= 1){
-                        ticks_left = 0;
-                        if((current_status == status::internal) || (current_status != status::border)){
-                            // mitigate bugs: if the status is neither border or internal (nor terminated*), it becomes border
-                            current_status = status::border;
-                            ticks_left = atb + 1;
-                        } else {
-                            assert(current_status == status::border);
-                            current_status = status::terminated;
-                        }
-                    }else{
-                        --ticks_left;
+                    if(ticks_left == 0){
+                        return (uint)status::terminated;
                     }
-                    return (ticks_left << BITS_TO_SHIFT) | (uint)current_status;
+                    status cr = (--ticks_left >= ati) //
+                        ? status::internal //
+                        : status::border;
+                    // mitigate bugs: if the status is neither border or internal (nor terminated*), it becomes border
+                    return (ticks_left << BITS_TO_SHIFT) | ((uint)cr);
                 }
             );
             status curr_status = static_cast<status>(ticks_left__status & STATUS_MASK);
