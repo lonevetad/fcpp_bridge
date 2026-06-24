@@ -19,33 +19,54 @@ class Compiler:
 
     Constructor parameters
     ----------------------
-    cache_dir        Where compiled binaries are cached (default: "build").
-    cpp_dir          Where generated C++ source files are written (default:
-                     "cpp_transpiled").
-    gcc_path         Path to the g++ executable (default: "g++").
-    std              C++ standard flag value — e.g. "c++14", "c++17", "c++26"
-                     (default: "c++26").
+    cache_dir        Where compiled binaries are cached.
+    cpp_dir          Where generated C++ source files are written.
+    gcc_path         Path to the g++ executable.
+    std              C++ standard flag value — e.g. "c++14", "c++17", "c++26".
     opt_level        Optimisation level digit/letter — "0", "1", "2", "3",
-                     "s", "g" (default: "2", i.e. -O2).
+                     "s", "g".
     extra_includes   Additional include directories prepended with -I.
+
+    Any parameter left as *None* is read from ``fcpp_bridge.yaml`` /
+    ``fcpp_bridge.json`` if such a file is found (searching from CWD upward).
+    When no config file exists the built-in defaults are used:
+    cache_dir="build", cpp_dir="cpp_transpiled", gcc_path="g++",
+    std="c++26", opt_level="2", extra_includes=[].
     """
 
     def __init__(
         self,
-        cache_dir: Path = Path("build"),
-        cpp_dir: Path = Path("cpp_transpiled"),
-        gcc_path: str = "g++",
-        std: str = "c++26",
-        opt_level: str = "2",
+        cache_dir: Optional[Path] = None,
+        cpp_dir: Optional[Path] = None,
+        gcc_path: Optional[str] = None,
+        std: Optional[str] = None,
+        opt_level: Optional[str] = None,
         extra_includes: Optional[List[str]] = None,
     ):
-        self.cache_dir = cache_dir
-        self.cpp_dir = cpp_dir
-        self.gcc_path = gcc_path
-        self.std = std
-        self.opt_level = opt_level
-        self.extra_includes: List[str] = list(
-            extra_includes) if extra_includes else []
+        if any(v is None for v in (cache_dir, cpp_dir, gcc_path, std, opt_level)):
+            from fcpp_bridge.config import load_config
+            bridge = load_config()
+            cfg = bridge.compiler
+            if cache_dir is None:
+                cache_dir = cfg.cache_dir
+            if cpp_dir is None:
+                cpp_dir = cfg.cpp_dir
+            if gcc_path is None:
+                gcc_path = cfg.gcc_path
+            if std is None:
+                # Derive from the unified cpp_standard setting.
+                std = f"c++{bridge.cpp_standard.value}"
+            if opt_level is None:
+                opt_level = cfg.opt_level
+            if extra_includes is None:
+                extra_includes = list(cfg.extra_includes)
+
+        self.cache_dir: Path = cache_dir
+        self.cpp_dir: Path = cpp_dir
+        self.gcc_path: str = gcc_path
+        self.std: str = std
+        self.opt_level: str = opt_level
+        self.extra_includes: List[str] = list(extra_includes)
 
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.cpp_dir.mkdir(parents=True, exist_ok=True)

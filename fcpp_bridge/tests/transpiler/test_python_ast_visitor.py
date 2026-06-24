@@ -131,6 +131,37 @@ def test_ast_visitor_power():
     assert "std::pow" in _v("x ** 2")
 
 
+def test_ast_visitor_floor_div():
+    assert _v("x // 2") == "(x / 2)"
+
+
+def test_ast_visitor_bitwise_or():
+    assert _v("a | b") == "(a | b)"
+
+
+def test_ast_visitor_bitwise_and():
+    assert _v("a & b") == "(a & b)"
+
+
+def test_ast_visitor_bitwise_xor():
+    assert _v("a ^ b") == "(a ^ b)"
+
+
+def test_ast_visitor_lshift():
+    assert _v("x << 2") == "(x << 2)"
+
+
+def test_ast_visitor_rshift():
+    assert _v("x >> 1") == "(x >> 1)"
+
+
+def test_ast_visitor_set_union_via_bitwise_or():
+    """set_t union: s | {x} → (s | set_t{x})"""
+    result = _v("s | frozenset({x})")
+    assert "|" in result
+    assert "set_t" in result
+
+
 # ============================================================================
 # Test 6: Comparison operators
 # ============================================================================
@@ -160,6 +191,25 @@ def test_ast_visitor_greater_equal():
     assert ">=" in _v("a >= b")
 
 
+def test_ast_visitor_in_operator():
+    result = _v("x in container")
+    assert "container" in result
+    assert ".count(x)" in result
+    assert "> 0" in result
+
+
+def test_ast_visitor_not_in_operator():
+    result = _v("x not in container")
+    assert "container" in result
+    assert ".count(x)" in result
+    assert "== 0" in result
+
+
+def test_ast_visitor_in_operator_key_in_map():
+    result = _v("key in local_db")
+    assert "local_db.count(key) > 0" in result or "(local_db).count(key) > 0" in result
+
+
 # ============================================================================
 # Test 7: Miscellaneous nodes
 # ============================================================================
@@ -171,6 +221,11 @@ def test_ast_visitor_string_constant():
 
 def test_ast_visitor_none_constant():
     assert _v("None") == "nullptr"
+
+
+def test_ast_visitor_bool_constants():
+    assert _v("True") == "true"
+    assert _v("False") == "false"
 
 
 def test_ast_visitor_attribute_access():
@@ -249,15 +304,18 @@ def test_ast_visitor_sp_collection_injects_call():
 
 
 def test_ast_visitor_mp_collection_injects_call():
-    assert _v("mp_collection(d, v, n, acc, div)") == "mp_collection(CALL, d, v, n, acc, div)"
+    assert _v(
+        "mp_collection(d, v, n, acc, div)") == "mp_collection(CALL, d, v, n, acc, div)"
 
 
 def test_ast_visitor_wmp_collection_injects_call():
-    assert _v("wmp_collection(d, r, v, acc, mul)") == "wmp_collection(CALL, d, r, v, acc, mul)"
+    assert _v(
+        "wmp_collection(d, r, v, acc, mul)") == "wmp_collection(CALL, d, r, v, acc, mul)"
 
 
 def test_ast_visitor_rectangle_walk_injects_call():
-    assert _v("rectangle_walk(lo, hi, mv, p)") == "rectangle_walk(CALL, lo, hi, mv, p)"
+    assert _v(
+        "rectangle_walk(lo, hi, mv, p)") == "rectangle_walk(CALL, lo, hi, mv, p)"
 
 
 def test_ast_visitor_follow_target_injects_call():
@@ -326,7 +384,8 @@ def test_flex_distance_injects_call():
 
 
 def test_bis_ksource_broadcast_injects_call():
-    assert "bis_ksource_broadcast(CALL," in _v("bis_ksource_broadcast(s, v, k, p, sp)")
+    assert "bis_ksource_broadcast(CALL," in _v(
+        "bis_ksource_broadcast(s, v, k, p, sp)")
 
 
 def test_gossip_min_injects_call():
@@ -342,11 +401,13 @@ def test_gossip_mean_injects_call():
 
 
 def test_list_idem_collection_injects_call():
-    assert "list_idem_collection(CALL," in _v("list_idem_collection(d, v, r, s, n, e, a)")
+    assert "list_idem_collection(CALL," in _v(
+        "list_idem_collection(d, v, r, s, n, e, a)")
 
 
 def test_list_arith_collection_injects_call():
-    assert "list_arith_collection(CALL," in _v("list_arith_collection(d, v, r, s, n, e, a)")
+    assert "list_arith_collection(CALL," in _v(
+        "list_arith_collection(d, v, r, s, n, e, a)")
 
 
 def test_follow_path_injects_call():
@@ -358,11 +419,13 @@ def test_follow_track_injects_call():
 
 
 def test_random_rectangle_target_injects_call():
-    assert "random_rectangle_target(CALL," in _v("random_rectangle_target(lo, hi)")
+    assert "random_rectangle_target(CALL," in _v(
+        "random_rectangle_target(lo, hi)")
 
 
 def test_neighbour_elastic_force_injects_call():
-    assert "neighbour_elastic_force(CALL," in _v("neighbour_elastic_force(l, s)")
+    assert "neighbour_elastic_force(CALL," in _v(
+        "neighbour_elastic_force(l, s)")
 
 
 def test_diameter_election_injects_call():
@@ -464,7 +527,8 @@ def test_visit_lambda_one_arg():
 
 
 def test_visit_lambda_two_args():
-    assert _ve("lambda a, b: a + b") == "[=](auto a, auto b) { return (a + b); }"
+    assert _ve(
+        "lambda a, b: a + b") == "[=](auto a, auto b) { return (a + b); }"
 
 
 def test_visit_lambda_nested_expression():
@@ -481,12 +545,14 @@ def test_visit_lambda_comparison():
 
 def test_fcpp_call_with_lambda_arg_fold_hood():
     src = "fold_hood(0, lambda a, b: a + b)"
-    assert _ve(src) == "fold_hood(CALL, 0, [=](auto a, auto b) { return (a + b); })"
+    assert _ve(
+        src) == "fold_hood(CALL, 0, [=](auto a, auto b) { return (a + b); })"
 
 
 def test_fcpp_call_with_lambda_arg_gossip():
     src = "gossip(val, lambda a, b: a + b)"
-    assert _ve(src) == "gossip(CALL, val, [=](auto a, auto b) { return (a + b); })"
+    assert _ve(
+        src) == "gossip(CALL, val, [=](auto a, auto b) { return (a + b); })"
 
 
 def test_fcpp_call_with_lambda_arg_split():
@@ -661,7 +727,7 @@ def test_while_with_break():
             if done:  # noqa: F821
                 break
     result = _body(fn)
-    assert "while (True)" in result
+    assert "while (true)" in result
     assert "break;" in result
 
 
@@ -692,6 +758,94 @@ def test_for_range_three_args():
             x = i  # noqa: F821
     result = _body(fn)
     assert "for (int i = 0; i < 20; i += 2)" in result
+
+
+# ============================================================================
+# Phase 6: Generic for-loop (non-range iteration)
+# ============================================================================
+
+
+def test_for_generic_container():
+    """for x in container → for (auto& x : container)"""
+    def fn():
+        for item in collection:  # noqa: F821
+            process(item)  # noqa: F821
+    result = _body(fn)
+    assert "for (auto& item : collection)" in result
+
+
+def test_for_dict_items_structured_binding():
+    """for (k, v) in d.items() → for (auto& [k, v] : d)"""
+    def fn():
+        for k, v in mapping.items():  # noqa: F821
+            use(k, v)  # noqa: F821
+    result = _body(fn)
+    assert "for (auto& [k, v] : mapping)" in result
+
+
+def test_for_dict_keys_structured_binding():
+    """for k in d.keys() → for (auto& [k, _kv_k] : d)"""
+    def fn():
+        for k in mapping.keys():  # noqa: F821
+            use(k)  # noqa: F821
+    result = _body(fn)
+    assert "for (auto& [k, _kv_k] : mapping)" in result
+
+
+def test_for_dict_values_structured_binding():
+    """for v in d.values() → for (auto& [_kv_v, v] : d)"""
+    def fn():
+        for v in mapping.values():  # noqa: F821
+            use(v)  # noqa: F821
+    result = _body(fn)
+    assert "for (auto& [_kv_v, v] : mapping)" in result
+
+
+def test_for_generic_body_indented():
+    """Generic for body is correctly indented."""
+    def fn():
+        for x in items:  # noqa: F821
+            if x > 0:  # noqa: F821
+                y = x  # noqa: F821
+    result = _body(fn)
+    assert "for (auto& x : items)" in result
+    assert "if (" in result
+
+
+def test_for_nested_tuple_unpacking_items():
+    """for (k1, k2), v in d.items() → structured binding with nested unpack."""
+    def fn():
+        for (a, b), v in d.items():  # noqa: F821
+            use(a, b, v)  # noqa: F821
+    result = _body(fn)
+    assert "for (auto& [_kvkey, v] : d)" in result
+    assert "auto& [a, b] = _kvkey" in result
+
+
+# ============================================================================
+# Phase 5+: is / is not operators
+# ============================================================================
+
+
+def test_is_none():
+    """`x is None` → `(x == nullptr)`"""
+    result = _v("x is None")
+    assert "(x == nullptr)" == result
+
+
+def test_is_not_none():
+    """`x is not None` → `(x != nullptr)`"""
+    result = _v("x is not None")
+    assert "(x != nullptr)" == result
+
+
+def test_is_not_none_in_if():
+    """`if val is not None:` produces correct C++ condition."""
+    def fn():
+        if val is not None:  # noqa: F821
+            use(val)  # noqa: F821
+    result = _body(fn)
+    assert "val != nullptr" in result
 
 
 # ============================================================================
@@ -947,3 +1101,639 @@ def test_broadcast_with_self_uid():
     """broadcast(is_receiver, self_uid()) → broadcast(CALL, is_receiver, node.uid)"""
     result = _v("broadcast(is_receiver, self_uid())")
     assert result == "broadcast(CALL, is_receiver, node.uid)"
+
+
+# ── Step A — Phase 7: collection constructors, set literal, dict.get ─────────
+
+
+def test_dict_call_identity():
+    """dict(x) → x  (C++ copy semantics)"""
+    assert _v("dict(x)") == "x"
+
+
+def test_dict_call_empty():
+    """dict() → {}"""
+    assert _v("dict()") == "{}"
+
+
+def test_set_call_from_iterable():
+    """set(iterable) → set_t{iterable.begin(), iterable.end()}"""
+    result = _v("set(items)")
+    assert "set_t(" in result
+    assert "items.begin()" in result
+    assert "items.end()" in result
+
+
+def test_set_call_empty():
+    """set() → set_t{}"""
+    assert _v("set()") == "set_t{}"
+
+
+def test_set_literal_to_set_t():
+    """Python set literal {a, b} → set_t{a, b}"""
+    result = _v("{x, y}")
+    assert result == "set_t{x, y}"
+
+
+def test_set_literal_single_element():
+    """Python set literal {uid()} → set_t{uid()}"""
+    result = _v("{uid()}")
+    assert result.startswith("set_t{")
+
+
+def test_set_call_marks_uses_frozenset():
+    """set() call triggers set_t alias emission (uses_frozenset flag)."""
+    import ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor()
+    v.visit(ast.parse("set(items)").body[0].value)
+    assert v.uses_frozenset is True
+
+
+def test_set_literal_marks_uses_frozenset():
+    """Set literal triggers set_t alias emission (uses_frozenset flag)."""
+    import ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor()
+    v.visit(ast.parse("{x, y}").body[0].value)
+    assert v.uses_frozenset is True
+
+
+def test_dict_get_no_default():
+    """dict.get(key) → (dict.count(key) ? dict.at(key) : default_init)"""
+    result = _v("d.get(k)")
+    assert "d.count(k)" in result
+    assert "d.at(k)" in result
+
+
+def test_dict_get_with_default():
+    """dict.get(key, default) → (dict.count(key) ? dict.at(key) : default)"""
+    result = _v("d.get(k, 0)")
+    assert "d.count(k)" in result
+    assert "d.at(k)" in result
+    assert "0" in result
+
+
+# ============================================================================
+# Phase 4 extension: short-circuit booleans + bitwise negation + bitwise augassign
+# ============================================================================
+
+
+def test_bool_and_short_circuit():
+    """Python `and` already maps to C++ `&&` (short-circuit)."""
+    result = _ve("a and b")
+    assert "&&" in result
+    assert "||" not in result
+
+
+def test_bool_or_short_circuit():
+    """Python `or` already maps to C++ `||` (short-circuit)."""
+    result = _ve("a or b")
+    assert "||" in result
+    assert "&&" not in result
+
+
+def test_bool_chain_and_or():
+    """Mixed and/or chain preserves precedence via parenthesisation."""
+    result = _ve("a and b or c")
+    assert "&&" in result
+    assert "||" in result
+
+
+def test_unary_invert():
+    """`~x` → `(~x)` (bitwise NOT)."""
+    assert _ve("~x") == "(~x)"
+
+
+def test_unary_invert_on_expression():
+    """`~(a & b)` → `(~(a & b))`."""
+    result = _ve("~(a & b)")
+    assert result == "(~(a & b))"
+
+
+def test_unary_invert_in_assign():
+    """`mask = ~flags` → `auto mask = (~flags);`"""
+    result = _stmt("mask = ~flags")
+    assert "auto mask = (~flags);" == result
+
+
+def test_augassign_bitwise_or():
+    assert _stmt("x |= y") == "x |= y;"
+
+
+def test_augassign_bitwise_and():
+    assert _stmt("x &= y") == "x &= y;"
+
+
+def test_augassign_bitwise_xor():
+    assert _stmt("x ^= y") == "x ^= y;"
+
+
+def test_augassign_lshift():
+    assert _stmt("x <<= 1") == "x <<= 1;"
+
+
+def test_augassign_rshift():
+    assert _stmt("x >>= 1") == "x >>= 1;"
+
+
+def test_augassign_floor_div():
+    """`x //= 2` → `x /= 2;` (C++ integer division)."""
+    assert _stmt("x //= 2") == "x /= 2;"
+
+
+# ============================================================================
+# Phase 8: CppStandard enum
+# ============================================================================
+
+
+def test_cpp_standard_default_is_cpp17():
+    from fcpp_bridge.transpiler import CppStandard, PythonAstVisitor
+    v = PythonAstVisitor()
+    assert v.cpp_std == CppStandard.CPP17
+
+
+def test_cpp_standard_all_values_present():
+    from fcpp_bridge.transpiler import CppStandard
+    values = {s.value for s in CppStandard}
+    assert {14, 17, 20, 26} == values
+
+
+def test_cpp_standard_flag_cpp14():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP14.flag() == "-std=c++14"
+
+
+def test_cpp_standard_flag_cpp17():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP17.flag() == "-std=c++17"
+
+
+def test_cpp_standard_flag_cpp20():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP20.flag() == "-std=c++20"
+
+
+def test_cpp_standard_flag_cpp26():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP26.flag() == "-std=c++26"
+
+
+def test_cpp_standard_str_cpp14():
+    from fcpp_bridge.transpiler import CppStandard
+    assert str(CppStandard.CPP14) == "C++14"
+
+
+def test_cpp_standard_str_cpp26():
+    from fcpp_bridge.transpiler import CppStandard
+    assert str(CppStandard.CPP26) == "C++26"
+
+
+def test_cpp_standard_cpp14_supports_ranges_false():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP14.supports_ranges() is False
+
+
+def test_cpp_standard_cpp17_supports_ranges_false():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP17.supports_ranges() is False
+
+
+def test_cpp_standard_cpp20_supports_ranges_true():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP20.supports_ranges() is True
+
+
+def test_cpp_standard_cpp26_supports_ranges_true():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP26.supports_ranges() is True
+
+
+def test_cpp_standard_cpp14_supports_structured_bindings_false():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP14.supports_structured_bindings() is False
+
+
+def test_cpp_standard_cpp17_supports_structured_bindings_true():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP17.supports_structured_bindings() is True
+
+
+def test_cpp_standard_cpp20_supports_structured_bindings_true():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP20.supports_structured_bindings() is True
+
+
+def test_cpp_standard_cpp26_supports_structured_bindings_true():
+    from fcpp_bridge.transpiler import CppStandard
+    assert CppStandard.CPP26.supports_structured_bindings() is True
+
+
+# ============================================================================
+# Phase 8 extension: C++14 structured-binding fallbacks
+# ============================================================================
+
+
+def _v14(expr_str: str) -> str:
+    """Visit expression with C++14 standard."""
+    from fcpp_bridge.transpiler import CppStandard, PythonAstVisitor
+    import ast as _ast
+    v = PythonAstVisitor(cpp_std=CppStandard.CPP14)
+    return v.visit(_ast.parse(expr_str).body[0].value)
+
+
+def _body14(fn) -> str:
+    """Transpile function body with C++14 standard."""
+    import ast as _ast, inspect, textwrap
+    from fcpp_bridge.transpiler import CppStandard, PythonAstVisitor
+    source = textwrap.dedent(inspect.getsource(fn))
+    tree = _ast.parse(source)
+    stmts = tree.body[0].body
+    v = PythonAstVisitor(cpp_std=CppStandard.CPP14)
+    return v.transpile_statements(stmts)
+
+
+def test_cpp14_for_dict_items_uses_first_second():
+    """C++14: `for k, v in d.items()` → `.first/.second` instead of structured binding."""
+    def fn():
+        for k, v in d.items():  # noqa: F821
+            use(k, v)  # noqa: F821
+    result = _body14(fn)
+    assert "auto& _kv : d" in result
+    assert "_kv.first" in result
+    assert "_kv.second" in result
+    assert "[k, v]" not in result
+
+
+def test_cpp14_for_dict_keys_uses_first():
+    """C++14: `for k in d.keys()` → `.first` instead of structured binding."""
+    def fn():
+        for k in d.keys():  # noqa: F821
+            use(k)  # noqa: F821
+    result = _body14(fn)
+    assert "auto& _kv : d" in result
+    assert "_kv.first" in result
+    assert "[k," not in result
+
+
+def test_cpp14_for_dict_values_uses_second():
+    """C++14: `for v in d.values()` → `.second` instead of structured binding."""
+    def fn():
+        for v in d.values():  # noqa: F821
+            use(v)  # noqa: F821
+    result = _body14(fn)
+    assert "auto& _kv : d" in result
+    assert "_kv.second" in result
+
+
+def test_cpp14_for_nested_tuple_uses_std_get():
+    """C++14: `for (k1, k2), v in d.items()` → `std::get<>` on pair key."""
+    def fn():
+        for (a, b), v in d.items():  # noqa: F821
+            use(a, b, v)  # noqa: F821
+    result = _body14(fn)
+    assert "auto& _kv : d" in result
+    assert "std::get<0>(_kv.first)" in result
+    assert "std::get<1>(_kv.first)" in result
+    assert "_kv.second" in result
+
+
+def test_cpp14_dict_keys_expr_uses_first():
+    """C++14: `d.keys()` expression IIFE uses `_kv.first`."""
+    result = _v14("d.keys()")
+    assert "auto& _kv : d" in result
+    assert "_kv.first" in result
+    assert "[_k, _v]" not in result
+
+
+def test_cpp14_dict_values_expr_uses_second():
+    """C++14: `d.values()` expression IIFE uses `_kv.second`."""
+    result = _v14("d.values()")
+    assert "auto& _kv : d" in result
+    assert "_kv.second" in result
+
+
+def test_cpp14_set_of_dict_keys_uses_first():
+    """C++14: `set(d.keys())` IIFE uses `_kv.first`."""
+    result = _v14("set(d.keys())")
+    assert "_kv.first" in result
+    assert "[_k, _v]" not in result
+
+
+def test_cpp14_list_comp_dict_items_uses_first_second():
+    """C++14: `[k for k, v in d.items()]` comprehension uses `.first/.second`."""
+    result = _v14("[k for k, v in d.items()]")
+    assert "_kv.first" in result
+    assert "_kv.second" in result
+    assert "[k, v]" not in result
+
+
+def test_cpp14_dict_comp_items_uses_first_second():
+    """C++14: `{k: v for k, v in d.items()}` dict comprehension uses `.first/.second`."""
+    result = _v14("{k: v for k, v in d.items()}")
+    assert "_kv.first" in result or "_r[k] = v" in result  # unpack then assign
+    assert "std::map<_K, _V>" in result
+
+
+def test_cpp26_for_dict_items_uses_structured_bindings():
+    """C++26 still uses structured bindings (C++17+ feature)."""
+    from fcpp_bridge.transpiler import CppStandard, PythonAstVisitor
+    import ast as _ast, inspect, textwrap
+    def fn():
+        for k, v in d.items():  # noqa: F821
+            use(k, v)  # noqa: F821
+    source = textwrap.dedent(inspect.getsource(fn))
+    tree = _ast.parse(source)
+    v = PythonAstVisitor(cpp_std=CppStandard.CPP26)
+    result = v.transpile_statements(tree.body[0].body)
+    assert "auto& [k, v] : d" in result
+
+
+def test_cpp26_dict_keys_uses_ranges():
+    """C++26 dict.keys() expression → std::views::keys (ranges available)."""
+    from fcpp_bridge.transpiler import CppStandard, PythonAstVisitor
+    import ast as _ast
+    v = PythonAstVisitor(cpp_std=CppStandard.CPP26)
+    result = v.visit(_ast.parse("d.keys()").body[0].value)
+    assert "std::views::keys(d)" == result
+
+
+# ============================================================================
+# Phase 8: Type annotation tracking
+# ============================================================================
+
+
+def test_annotation_dict_type_tracked():
+    """Dict[int, float] annotation populates dict_type_env."""
+    import ast as _ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor()
+    v.visit(_ast.parse("d: Dict[int, float]").body[0])
+    assert "d" in v.dict_type_env
+    assert v.dict_type_env["d"] == ("int", "double")
+
+
+def test_annotation_dict_nested_type():
+    """Dict[int, Tuple[float, float]] → key=int, val=std::tuple<double, double>."""
+    import ast as _ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor()
+    v.visit(_ast.parse("db: Dict[int, Tuple[float, float]]").body[0])
+    assert "db" in v.dict_type_env
+    k, val = v.dict_type_env["db"]
+    assert k == "int"
+    assert "tuple" in val.lower() and "double" in val
+
+
+def test_annotation_non_dict_not_tracked():
+    """Non-dict annotations don't pollute dict_type_env."""
+    import ast as _ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor()
+    v.visit(_ast.parse("x: int = 0").body[0])
+    assert "x" not in v.dict_type_env
+
+
+# ============================================================================
+# Phase 8: dict.keys() / dict.values() in expression context
+# ============================================================================
+
+
+def test_dict_keys_expression_cpp17():
+    """d.keys() in expression context → C++17 IIFE."""
+    from fcpp_bridge.transpiler import CppStandard
+    import ast as _ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor(cpp_std=CppStandard.CPP17)
+    result = v.visit(_ast.parse("d.keys()").body[0].value)
+    assert "[&]()" in result
+    assert "push_back(_k)" in result
+    assert "std::vector" in result
+
+
+def test_dict_keys_expression_cpp20():
+    """d.keys() in expression context → C++20 std::views::keys."""
+    from fcpp_bridge.transpiler import CppStandard
+    import ast as _ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor(cpp_std=CppStandard.CPP20)
+    result = v.visit(_ast.parse("d.keys()").body[0].value)
+    assert "std::views::keys(d)" == result
+    assert v.uses_ranges_header is True
+
+
+def test_dict_values_expression_cpp17():
+    """d.values() in expression context → C++17 IIFE."""
+    from fcpp_bridge.transpiler import CppStandard
+    import ast as _ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor(cpp_std=CppStandard.CPP17)
+    result = v.visit(_ast.parse("d.values()").body[0].value)
+    assert "[&]()" in result
+    assert "push_back(_v)" in result
+    assert "std::vector" in result
+
+
+def test_dict_values_expression_cpp20():
+    """d.values() in expression context → C++20 std::views::values."""
+    from fcpp_bridge.transpiler import CppStandard
+    import ast as _ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor(cpp_std=CppStandard.CPP20)
+    result = v.visit(_ast.parse("d.values()").body[0].value)
+    assert "std::views::values(d)" == result
+
+
+def test_dict_keys_with_annotation_uses_concrete_type():
+    """Dict[int, float] annotation → keys IIFE uses `int` not `decltype`."""
+    import ast as _ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor()
+    src = "d: Dict[int, float]\nkeylist = d.keys()"
+    tree = _ast.parse(src)
+    v.visit(tree.body[0])  # process annotation
+    result = v.visit(tree.body[1].value)  # visit d.keys()
+    assert "std::vector<int>" in result
+    assert "decltype" not in result
+
+
+def test_dict_values_with_annotation_uses_concrete_type():
+    """Dict[str, double] annotation → values IIFE uses `double` not `decltype`."""
+    import ast as _ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor()
+    src = "d: Dict[int, float]\nvallist = d.values()"
+    tree = _ast.parse(src)
+    v.visit(tree.body[0])
+    result = v.visit(tree.body[1].value)
+    assert "std::vector<double>" in result
+    assert "decltype" not in result
+
+
+def test_set_of_dict_keys():
+    """set(d.keys()) → typed std::set IIFE."""
+    result = _v("set(d.keys())")
+    assert "std::set<" in result
+    assert "_k" in result
+    assert "[&]()" in result
+
+
+def test_set_of_dict_values():
+    """set(d.values()) → typed std::set IIFE."""
+    result = _v("set(d.values())")
+    assert "std::set<" in result
+    assert "_v" in result
+
+
+# ============================================================================
+# Phase 8: List comprehensions
+# ============================================================================
+
+
+def test_list_comp_range_no_cond():
+    """[i for i in range(N)] → IIFE with int vector and C-style for."""
+    result = _v("[i for i in range(N)]")
+    assert "std::vector<int>" in result
+    assert "for (int i = 0; i < N; ++i)" in result
+    assert "_r.push_back(i)" in result
+
+
+def test_list_comp_range_with_cond():
+    """[i for i in range(N) if i not in known] — the scattered_database.py gap."""
+    result = _v("[i for i in range(N) if i not in known]")
+    assert "std::vector<int>" in result
+    assert "if (" in result
+    assert "known" in result
+    assert "_r.push_back(i)" in result
+
+
+def test_list_comp_range_two_arg():
+    """[i for i in range(2, N)]"""
+    result = _v("[i for i in range(2, N)]")
+    assert "int i = 2" in result
+    assert "i < N" in result
+
+
+def test_list_comp_generic_no_cond():
+    """[x for x in collection] → IIFE with auto& for loop."""
+    result = _v("[x for x in collection]")
+    assert "for (auto& x : collection)" in result
+    assert "_r.push_back(x)" in result
+    assert "std::vector" in result
+
+
+def test_list_comp_generic_with_cond():
+    """[tc for tc in tile_shapes if tc not in tile_owner] — area_discovery.py gap."""
+    result = _v("[tc for tc in tile_shapes if tc not in tile_owner]")
+    assert "for (auto& tc : tile_shapes)" in result
+    assert "tile_owner" in result
+    assert "_r.push_back(tc)" in result
+
+
+def test_list_comp_transform():
+    """[f(x) for x in collection] — element type deduced via _expr_fn."""
+    result = _v("[f(x) for x in collection]")
+    assert "_expr_fn" in result
+    assert "_T" in result
+    assert "push_back(f(x))" in result
+
+
+def test_list_comp_dict_items():
+    """[k for k, v in d.items()] — structured binding."""
+    result = _v("[k for k, v in d.items()]")
+    assert "for (auto& [k, v] : d)" in result
+    assert "_r.push_back(k)" in result
+
+
+def test_list_comp_dict_keys_iter():
+    """[k for k in d.keys()] — iterates dict keys via structured binding."""
+    result = _v("[k for k in d.keys()]")
+    assert "for (auto& [k, _v_k] : d)" in result
+    assert "_r.push_back(k)" in result
+
+
+def test_list_comp_dict_values_iter():
+    """[v for v in d.values()] — iterates dict values via structured binding."""
+    result = _v("[v for v in d.values()]")
+    assert "for (auto& [_k_v, v] : d)" in result
+    assert "_r.push_back(v)" in result
+
+
+def test_list_comp_is_expression():
+    """List comprehension as argument to another call."""
+    result = _v("len([i for i in range(5)])")
+    assert "size()" in result  # len() → .size()
+    assert "std::vector<int>" in result
+
+
+# ============================================================================
+# Phase 8: Set comprehensions
+# ============================================================================
+
+
+def test_set_comp_basic():
+    """{x for x in collection} → IIFE returning std::set."""
+    result = _v("{x for x in collection}")
+    assert "std::set<" in result
+    assert "for (auto& x : collection)" in result
+    assert "_r.insert(x)" in result
+
+
+def test_set_comp_with_cond():
+    """{x for x in collection if x > 0}"""
+    result = _v("{x for x in collection if x > 0}")
+    assert "std::set<" in result
+    assert "if (" in result
+    assert "_r.insert(x)" in result
+
+
+def test_set_comp_range():
+    """{i for i in range(N)} → std::set<int>."""
+    result = _v("{i for i in range(N)}")
+    assert "std::set<int>" in result
+    assert "_r.insert(i)" in result
+
+
+def test_set_comp_marks_frozenset():
+    """Set comprehension sets uses_frozenset (triggers <set> include)."""
+    import ast as _ast
+    from fcpp_bridge.transpiler import PythonAstVisitor
+    v = PythonAstVisitor()
+    v.visit(_ast.parse("{x for x in c}").body[0].value)
+    assert v.uses_frozenset is True
+
+
+# ============================================================================
+# Phase 8: Dict comprehensions
+# ============================================================================
+
+
+def test_dict_comp_range():
+    """{i: i*2 for i in range(N)} → IIFE returning std::map."""
+    result = _v("{i: i*2 for i in range(N)}")
+    assert "std::map<_K, _V>" in result
+    assert "for (int i = 0; i < N; ++i)" in result
+    assert "_r[i] = (i * 2)" in result
+
+
+def test_dict_comp_items():
+    """{k: v*2 for k, v in d.items()} → structured binding."""
+    result = _v("{k: v*2 for k, v in d.items()}")
+    assert "for (auto& [k, v] : d)" in result
+    assert "_r[k] = (v * 2)" in result
+    assert "std::map<_K, _V>" in result
+
+
+def test_dict_comp_generic():
+    """{x: f(x) for x in collection} — generic iteration."""
+    result = _v("{x: f(x) for x in collection}")
+    assert "for (auto& x : collection)" in result
+    assert "_r[x] = f(x)" in result
+    assert "std::map<_K, _V>" in result
+
+
+def test_dict_comp_with_cond():
+    """{k: v for k, v in d.items() if k > 0}"""
+    result = _v("{k: v for k, v in d.items() if k > 0}")
+    assert "if (" in result
+    assert "_r[k] = v" in result

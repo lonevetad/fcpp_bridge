@@ -8,11 +8,14 @@ logs/
 
 fcpp/
 fcpp/*
+fcpp-exercises
+
+!fcpp_exercises_backup/*
 
 # Generated C++ code
 cpp_transpiled/
-*.cpp
-*.hpp
+# *.cpp
+# *.hpp
 
 # Build artifacts
 build/
